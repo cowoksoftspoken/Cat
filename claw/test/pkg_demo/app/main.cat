@@ -1,0 +1,9 @@
+realm app.main
+
+import super.{util}
+import app.runtime.{banner}
+
+fn main() -> Int32 {
+    banner()
+    give util.answer()
+}

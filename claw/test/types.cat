@@ -1,0 +1,62 @@
+realm test.types
+
+// ─── Shape with shared fields ────────────────────────────────
+shape Point {
+    share x: Int32
+    share y: Int32
+}
+
+shape Config {
+    share host: Text
+    share port: Int32
+    secret_key: Text
+}
+
+// ─── Choice (tagged union) ───────────────────────────────────
+choice Color {
+    red
+    green
+    blue
+    custom(r: Int32, g: Int32, b: Int32)
+}
+
+// ─── Generic choice ──────────────────────────────────────────
+choice Maybe of T {
+    none
+    some(value: T)
+}
+
+choice Outcome of T, E {
+    ok(value: T)
+    fail(cause: E)
+}
+
+// ─── pick pattern matching ───────────────────────────────────
+fn describe_color(c: Color) {
+    pick c {
+        red {
+            println("red")
+        }
+        green {
+            println("green")
+        }
+        blue {
+            println("blue")
+        }
+        custom(r, g, b) {
+            println("custom color")
+        }
+    }
+}
+
+// ─── View types ──────────────────────────────────────────────
+fn inspect(cfg: look Config) {
+    print(cfg.host)
+}
+
+fn update_port(cfg: edit Config, new_port: Int32) {
+    cfg.port = new_port
+}
+
+
+

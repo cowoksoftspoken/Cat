@@ -1,0 +1,21 @@
+oir.realm test.air
+oir.shape Config
+  field host: Text
+  field payload: T
+oir.choice Maybe
+  case none
+  case some(T)
+oir.fn classify(cfg: look Config of Int32, item: Maybe of Int32) -> Int32
+  block entry:
+    %t0 = field cfg.host : look Text
+    call print(%t0) : Unit
+    %t1 = field cfg.payload : Int32
+    call print(%t1) : Unit
+    pick item : Maybe of Int32
+    case none -> pick_none_1
+    case some(value) -> pick_some_2
+  block pick_none_1:
+    call println("empty") : Unit
+    return 0 : Int32
+  block pick_some_2:
+    return value : Int32

@@ -1,0 +1,43 @@
+realm test.control_flow
+
+// ─── when / otherwise ────────────────────────────────────────
+fn abs(n: Int32) -> Int32 {
+    when n > 0 {
+        give n
+    } otherwise {
+        give 0 - n
+    }
+}
+
+// ─── loop (conditional) ──────────────────────────────────────
+fn count_down(start: Int32) -> Int32 {
+    slot i = start
+    loop i > 0 {
+        i = i - 1
+    }
+    give i
+}
+
+// ─── scan iteration ──────────────────────────────────────────
+fn total(data: look Span) -> Int32 {
+    slot sum: Int32 = 0
+    scan item over data {
+        sum = sum + item
+    }
+    give sum
+}
+
+// ─── loop with stop/skip ─────────────────────────────────────
+fn find_first(data: look Span, target: Int32) -> Int32 {
+    slot result: Int32 = 0
+    scan item over data {
+        when item == target {
+            result = item
+            stop
+        }
+    }
+    give result
+}
+
+
+

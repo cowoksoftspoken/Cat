@@ -1,0 +1,65 @@
+realm demo.syntax
+
+shape Config {
+    share host: Text
+    share port: Int32
+}
+
+choice Maybe of T {
+    none
+    some(value: T)
+}
+
+fn greet(name: look Text) {
+    print(name)
+}
+
+fn add(a: Int32, b: Int32) -> Int32 {
+    give a + b
+}
+
+fn check_size(size: Int32) -> Int32 {
+    when size > 0 {
+        give size
+    } otherwise {
+        give 0
+    }
+}
+
+fn count_up(limit: Int32) -> Int32 {
+    slot i: Int32 = 0
+    loop i < limit {
+        i = i + 1
+    }
+    give i
+}
+
+fn sum_items(data: look Span) -> Int32 {
+    slot total: Int32 = 0
+    scan item over data {
+        total = total + item
+    }
+    give total
+}
+
+fn show_maybe(val: Maybe of Int32) {
+    pick val {
+        none {
+            println("empty")
+        }
+        some(v) {
+            print(v)
+        }
+    }
+}
+
+fn consume_text(text: Text) {
+}
+
+fn test_moves() {
+    slot message: Text = "hello"
+    consume_text(message)
+}
+
+
+

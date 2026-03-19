@@ -1,0 +1,68 @@
+realm test.scope_isolation
+
+choice Maybe of T {
+    none
+    some(value: T)
+}
+
+fn scope_leak_test(x: Int32) -> Int32 {
+    when x > 0 {
+        hold inner_val = 42
+    }
+    give x
+}
+
+fn exclusive_branches(n: Int32) -> Int32 {
+    when n > 0 {
+        give n
+    } otherwise {
+        give 0 - n
+    }
+}
+
+fn branch_isolation(n: Int32) -> Int32 {
+    when n > 10 {
+        hold a_only = 100
+        give a_only
+    } otherwise {
+        hold b_only = 200
+        give b_only
+    }
+}
+
+fn pick_isolation(val: Maybe of Int32) {
+    pick val {
+        none {
+            hold x = 1
+        }
+        some(v) {
+            hold y = v
+        }
+    }
+}
+
+fn loop_scope(limit: Int32) -> Int32 {
+    slot i: Int32 = 0
+    loop i < limit {
+        i = i + 1
+    }
+    give i
+}
+
+fn scan_scope(data: look Span) -> Int32 {
+    slot total: Int32 = 0
+    scan item over data {
+        total = total + item
+    }
+    give total
+}
+
+fn reassign_test(flag: Int32) -> Text {
+    slot x: Text = "seed"
+    when flag > 0 {
+        x = "left"
+    } otherwise {
+        x = "right"
+    }
+    give x
+}

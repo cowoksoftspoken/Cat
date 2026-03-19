@@ -1,0 +1,5 @@
+realm test.semantic_diagnostics
+
+fn broken() {
+    print(missing)
+}

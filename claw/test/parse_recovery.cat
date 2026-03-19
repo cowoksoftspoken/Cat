@@ -1,0 +1,15 @@
+realm test.parse_recovery
+
+fn broken() {
+    hold first =
+    hold second =
+    give 0
+}
+
+shape Broken {
+    left Int32
+}
+
+fn still_ok() {
+    println("ok")
+}

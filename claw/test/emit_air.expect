@@ -1,0 +1,16 @@
+air.realm test.air
+air.shape Config
+  host: Text
+  payload: T
+air.choice Maybe
+  none
+  some(T)
+air.fn classify(cfg: look Config of Int32, item: Maybe of Int32) -> Int32
+  expr print(cfg.host : look Text) : Unit
+  expr print(cfg.payload : Int32) : Unit
+  pick item : Maybe of Int32
+    none
+      expr println("empty" : Text) : Unit
+      give 0 : Int32
+    some(value)
+      give value : Int32

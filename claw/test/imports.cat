@@ -1,0 +1,11 @@
+realm test.imports
+
+import core.{fmt, math}
+import std.fs
+import super.{import_helpers}
+
+fn main() -> Int32 {
+    import_helpers.say_hello()
+    println("imports work!")
+    give 0
+}

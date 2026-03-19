@@ -1,0 +1,30 @@
+realm test.generic_instantiation
+
+shape Box of T {
+    share item: T
+}
+
+choice Maybe of T {
+    none
+    some(value: T)
+}
+
+fn read_box(box: look Box of Int32) -> Int32 {
+    give box.item
+}
+
+fn unwrap_or_zero(input: Maybe of Int32) -> Int32 {
+    pick input {
+        none {
+            give 0
+        }
+        some(value) {
+            give value
+        }
+    }
+}
+
+fn read_pair(left: look Box of Int32, right: look Box of Int32) -> Int32 {
+    print(right.item)
+    give left.item
+}
