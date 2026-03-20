@@ -1,0 +1,5 @@
+realm main
+
+fn main() -> Int32 {
+    give 0
+}

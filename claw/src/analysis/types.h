@@ -2,6 +2,7 @@
 
 #include "diagnostics/diagnostics.h"
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -15,6 +16,7 @@ struct Expr;
 struct FnDecl;
 struct BindingStmt;
 struct ScanStmt;
+struct ModuleInfo;
 
 enum class TypeCategory {
     Unknown,
@@ -29,11 +31,6 @@ enum class SymbolKind {
     Shape,
     Choice,
     Module,
-};
-
-struct ImportedBinding {
-    std::string name;
-    SymbolKind kind = SymbolKind::Module;
 };
 
 struct ResolvedType {
@@ -69,7 +66,22 @@ struct ChoiceInfo {
 struct FunctionSignature {
     std::vector<ResolvedType> paramTypes;
     ResolvedType returnType;
+    std::optional<size_t> viewReturnSourceParam;
     bool isExternal = false;
+};
+
+struct ImportedBinding {
+    std::string name;
+    SymbolKind kind = SymbolKind::Module;
+    std::optional<FunctionSignature> functionSignature;
+    std::optional<ShapeInfo> shapeInfo;
+    std::optional<ChoiceInfo> choiceInfo;
+    std::shared_ptr<ModuleInfo> moduleInfo;
+};
+
+struct ModuleInfo {
+    std::string realmName;
+    std::unordered_map<std::string, ImportedBinding> exportedItems;
 };
 
 struct AnalysisResult {

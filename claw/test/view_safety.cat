@@ -1,0 +1,27 @@
+realm test.view_safety
+
+fn consume_text(text: Text) {
+}
+
+fn echo_view(text: look Text) -> look Text {
+    give text
+}
+
+fn scope_release() {
+    slot message: Text = "hello"
+    when 1 == 1 {
+        hold view: look Text = message
+        println(view)
+    }
+    consume_text(message)
+}
+
+fn binding_from_view_call() {
+    slot message: Text = "hello"
+    hold view: look Text = echo_view(message)
+    println(view)
+}
+
+fn return_passthrough(text: look Text) -> look Text {
+    give echo_view(text)
+}

@@ -25,7 +25,9 @@ pass_cases=(
   "test/imports.cat"
   "test/prelude_prints.cat"
   "test/generic_instantiation.cat"
-  "test/pkg_demo/modules.cat"
+  "test/view_safety.cat"
+  "test/pkg_demo"
+  "test/pkg_rootless_demo"
 )
 
 for case_file in "${pass_cases[@]}"; do
@@ -33,8 +35,17 @@ for case_file in "${pass_cases[@]}"; do
   "$CLAW_EXE" check "$ROOT_DIR/$case_file"
 done
 
-echo "[build/pass] test/pkg_demo/modules.cat"
-"$CLAW_EXE" build "$ROOT_DIR/test/pkg_demo/modules.cat"
+echo "[build/pass] test/pkg_demo"
+"$CLAW_EXE" build "$ROOT_DIR/test/pkg_demo"
+
+echo "[build/pass] test/pkg_demo/claw.toml"
+"$CLAW_EXE" build "$ROOT_DIR/test/pkg_demo/claw.toml"
+
+echo "[build/pass] test/pkg_rootless_demo"
+"$CLAW_EXE" build "$ROOT_DIR/test/pkg_rootless_demo"
+
+echo "[build/pass] test/pkg_rootless_demo/claw.toml"
+"$CLAW_EXE" build "$ROOT_DIR/test/pkg_rootless_demo/claw.toml"
 
 echo "[check/fail] test/ownership.cat"
 ownership_output=""
@@ -47,6 +58,20 @@ if [[ "$ownership_output" != *"error[ownership]: Use of moved value -> message"*
    [[ "$ownership_output" != *"^^^^^^^"* ]]; then
   echo "ownership.cat failed, but not with the expected diagnostic output" >&2
   printf '%s\n' "$ownership_output" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/view_borrow_ownership.cat"
+view_borrow_output=""
+if view_borrow_output="$($CLAW_EXE check "$ROOT_DIR/test/view_borrow_ownership.cat" 2>&1)"; then
+  echo "expected view_borrow_ownership.cat to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$view_borrow_output" != *"error[ownership]: Cannot move value while it is borrowed -> message"* ]] ||
+   [[ "$view_borrow_output" != *"error[ownership]: Cannot create edit view while another view is active -> message"* ]] ||
+   [[ "$view_borrow_output" != *" --> "* ]]; then
+  echo "view_borrow_ownership.cat failed, but not with the expected ownership diagnostics" >&2
+  printf '%s\n' "$view_borrow_output" >&2
   exit 1
 fi
 
@@ -99,6 +124,20 @@ if [[ "$semantic_output" != *"error[semantic]: Undefined variable: missing"* ]] 
   exit 1
 fi
 
+echo "[check/fail] test/safety_diagnostics.cat"
+safety_output=""
+if safety_output="$($CLAW_EXE check "$ROOT_DIR/test/safety_diagnostics.cat" 2>&1)"; then
+  echo "expected safety_diagnostics.cat to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$safety_output" != *"Safe functions cannot return edit views."* ]] ||
+   [[ "$safety_output" != *"Returned view must be derived from a view parameter."* ]] ||
+   [[ "$safety_output" != *"Raw address values may only appear inside raw blocks."* ]]; then
+  echo "safety_diagnostics.cat did not contain the expected safety diagnostics" >&2
+  printf '%s\n' "$safety_output" >&2
+  exit 1
+fi
+
 echo "[check/fail] test/type_arity_diagnostics.cat"
 type_arity_output=""
 if type_arity_output="$($CLAW_EXE check "$ROOT_DIR/test/type_arity_diagnostics.cat" 2>&1)"; then
@@ -113,13 +152,53 @@ if [[ "$type_arity_output" != *"Type 'Box' expects 1 type argument(s), got 0."* 
   exit 1
 fi
 
+echo "[check/fail] test/pkg_bad_import"
+typed_import_output=""
+if typed_import_output="$($CLAW_EXE check "$ROOT_DIR/test/pkg_bad_import" 2>&1)"; then
+  echo "expected pkg_bad_import to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$typed_import_output" != *"error[semantic]: Call argument type mismatch: expected Int32, got Text"* ]] ||
+   [[ "$typed_import_output" != *" --> "* ]] ||
+   [[ "$typed_import_output" != *'add("oops", 1)'* ]]; then
+  echo "pkg_bad_import did not contain the expected typed import diagnostic" >&2
+  printf '%s\n' "$typed_import_output" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/pkg_missing_dep"
+missing_dep_output=""
+if missing_dep_output="$($CLAW_EXE check "$ROOT_DIR/test/pkg_missing_dep" 2>&1)"; then
+  echo "expected pkg_missing_dep to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$missing_dep_output" != *"error[module]: Unable to resolve import group rooted at 'term'."* ]] ||
+   [[ "$missing_dep_output" != *"import term.{emit}"* ]]; then
+  echo "pkg_missing_dep did not contain the expected missing dependency diagnostic" >&2
+  printf '%s\n' "$missing_dep_output" >&2
+  exit 1
+fi
+
+echo "[build/fail] test/pkg_bad_config"
+bad_config_output=""
+if bad_config_output="$($CLAW_EXE build "$ROOT_DIR/test/pkg_bad_config" 2>&1)"; then
+  echo "expected pkg_bad_config to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$bad_config_output" != *"Project config key 'entry' is not allowed. Root main.cat is the fixed workspace entry."* ]] ||
+   [[ "$bad_config_output" != *"entry = \"main.cat\""* ]]; then
+  echo "pkg_bad_config did not contain the expected config diagnostic" >&2
+  printf '%s\n' "$bad_config_output" >&2
+  exit 1
+fi
+
 echo "[open-file/fail] test/does_not_exist.cat"
 missing_output=""
 if missing_output="$($CLAW_EXE check "$ROOT_DIR/test/does_not_exist.cat" 2>&1)"; then
   echo "expected does_not_exist.cat to fail, but it passed" >&2
   exit 1
 fi
-if [[ "$missing_output" != *"Failed to open source file."* ]] ||
+if [[ "$missing_output" != *"Failed to resolve input path."* ]] ||
    [[ "$missing_output" != *"requested path:"* ]] ||
    [[ "$missing_output" != *"current working directory:"* ]] ||
    [[ "$missing_output" != *"kind: missing"* ]]; then
@@ -149,6 +228,18 @@ if [[ "$oir_output" != "$expected_oir_output" ]]; then
   printf '%s\n' "$expected_oir_output" >&2
   echo "--- actual ---" >&2
   printf '%s\n' "$oir_output" >&2
+  exit 1
+fi
+
+echo "[emit-oir] test/pkg_demo"
+package_oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/pkg_demo" | normalize_text)"
+expected_package_oir_output="$(cat "$ROOT_DIR/test/pkg_demo/emit_oir.expect" | normalize_text)"
+if [[ "$package_oir_output" != "$expected_package_oir_output" ]]; then
+  echo "pkg_demo emit_oir snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s\n' "$expected_package_oir_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s\n' "$package_oir_output" >&2
   exit 1
 fi
 

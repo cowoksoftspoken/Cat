@@ -37,6 +37,22 @@ bool isNumericTypeName(const std::string& name) {
     return numericTypes.find(name) != numericTypes.end();
 }
 
+bool isRawAddressTypeName(const std::string& name) {
+    return name == "Addr" || name == "RawPtr" || name == "RawMut";
+}
+
+std::string describeCalleeExpr(const Expr* expr) {
+    if (auto* ident = dynamic_cast<const IdentExpr*>(expr)) {
+        return ident->name;
+    }
+
+    if (auto* member = dynamic_cast<const MemberExpr*>(expr)) {
+        return describeCalleeExpr(member->object.get()) + "." + member->member;
+    }
+
+    return "<callee>";
+}
+
 } // namespace
 
 SemanticAnalyzer::SemanticAnalyzer(std::vector<ImportedBinding> importedBindings)
@@ -59,6 +75,28 @@ const FunctionSignature* SemanticAnalyzer::lookupFunctionSignature(const FnDecl*
 const FunctionSignature* SemanticAnalyzer::lookupFunctionSignature(const std::string& name) const {
     const auto it = analysisResult.functionsByName.find(name);
     return it != analysisResult.functionsByName.end() ? &it->second : nullptr;
+}
+
+const FunctionSignature* SemanticAnalyzer::lookupCallableSignature(const Expr* callee) const {
+    if (auto* ident = dynamic_cast<const IdentExpr*>(callee)) {
+        return lookupFunctionSignature(ident->name);
+    }
+
+    if (auto* member = dynamic_cast<const MemberExpr*>(callee)) {
+        if (auto* objectIdent = dynamic_cast<const IdentExpr*>(member->object.get())) {
+            const auto sym = lookupSymbol(objectIdent->name);
+            if (sym && sym->kind == SymbolKind::Module && sym->moduleInfo) {
+                const auto exported = sym->moduleInfo->exportedItems.find(member->member);
+                if (exported != sym->moduleInfo->exportedItems.end() &&
+                    exported->second.kind == SymbolKind::Function &&
+                    exported->second.functionSignature.has_value()) {
+                    return &*exported->second.functionSignature;
+                }
+            }
+        }
+    }
+
+    return nullptr;
 }
 
 const ShapeInfo* SemanticAnalyzer::lookupShape(const std::string& name) const {
@@ -111,7 +149,10 @@ void SemanticAnalyzer::analyze(RealmDecl* realm) {
     diagnostics.clear();
     currentFunction = nullptr;
     currentSignature = nullptr;
+    currentViewReturnSourceParam.reset();
+    currentViewReturnSeen = false;
     loopDepth = 0;
+    rawDepth = 0;
 
     scopes.enterScope();
     registerPrelude();
@@ -133,42 +174,63 @@ void SemanticAnalyzer::analyze(RealmDecl* realm) {
 }
 
 void SemanticAnalyzer::registerImports(const RealmDecl* realm) {
-    auto defineModule = [&](const std::string& name) {
+    auto defineModule = [&](const std::string& name, std::shared_ptr<ModuleInfo> moduleInfo = {}) {
         auto sym = std::make_shared<Symbol>();
         sym->name = name;
         sym->kind = SymbolKind::Module;
         sym->isExternal = true;
         sym->type = makeUnknownType(name);
+        sym->moduleInfo = std::move(moduleInfo);
         if (!scopes.define(name, sym)) {
             reportError("Duplicate imported name: " + name);
         }
     };
 
-    auto defineFunction = [&](const std::string& name) {
+    auto defineFunction = [&](const ImportedBinding& binding) {
+        if (binding.functionSignature.has_value()) {
+            FunctionSignature signature = *binding.functionSignature;
+            signature.isExternal = true;
+            analysisResult.functionsByName[binding.name] = signature;
+        }
+
         auto sym = std::make_shared<Symbol>();
-        sym->name = name;
+        sym->name = binding.name;
         sym->kind = SymbolKind::Function;
         sym->isExternal = true;
-        sym->type = makeUnknownType(name);
-        if (!scopes.define(name, sym)) {
-            reportError("Duplicate imported name: " + name);
+        sym->type = makeUnknownType(binding.name);
+        if (!scopes.define(binding.name, sym)) {
+            reportError("Duplicate imported name: " + binding.name);
         }
     };
 
-    auto defineType = [&](const std::string& name, SymbolKind kind) {
-        if (kind == SymbolKind::Choice) {
-            typeCatalog.registerChoiceName(name);
+    auto defineType = [&](const ImportedBinding& binding) {
+        if (binding.kind == SymbolKind::Choice) {
+            typeCatalog.registerChoiceName(
+                binding.name,
+                binding.choiceInfo.has_value()
+                    ? std::optional<size_t>(binding.choiceInfo->typeParams.size())
+                    : std::nullopt);
+            if (binding.choiceInfo.has_value()) {
+                analysisResult.choicesByName[binding.name] = *binding.choiceInfo;
+            }
         } else {
-            typeCatalog.registerShapeName(name);
+            typeCatalog.registerShapeName(
+                binding.name,
+                binding.shapeInfo.has_value()
+                    ? std::optional<size_t>(binding.shapeInfo->typeParams.size())
+                    : std::nullopt);
+            if (binding.shapeInfo.has_value()) {
+                analysisResult.shapesByName[binding.name] = *binding.shapeInfo;
+            }
         }
 
         auto sym = std::make_shared<Symbol>();
-        sym->name = name;
-        sym->kind = kind;
+        sym->name = binding.name;
+        sym->kind = binding.kind;
         sym->isExternal = true;
-        sym->type = makeOwnedType(name);
-        if (!scopes.define(name, sym)) {
-            reportError("Duplicate imported name: " + name);
+        sym->type = makeOwnedType(binding.name);
+        if (!scopes.define(binding.name, sym)) {
+            reportError("Duplicate imported name: " + binding.name);
         }
     };
 
@@ -176,17 +238,17 @@ void SemanticAnalyzer::registerImports(const RealmDecl* realm) {
         for (const auto& binding : importedBindings) {
             switch (binding.kind) {
                 case SymbolKind::Module:
-                    defineModule(binding.name);
+                    defineModule(binding.name, binding.moduleInfo);
                     break;
                 case SymbolKind::Function:
-                    defineFunction(binding.name);
+                    defineFunction(binding);
                     break;
                 case SymbolKind::Choice:
                 case SymbolKind::Shape:
-                    defineType(binding.name, binding.kind);
+                    defineType(binding);
                     break;
                 default:
-                    defineModule(binding.name);
+                    defineModule(binding.name, binding.moduleInfo);
                     break;
             }
         }
@@ -217,7 +279,6 @@ void SemanticAnalyzer::registerImports(const RealmDecl* realm) {
         registerImportedName(importedName);
     }
 }
-
 void SemanticAnalyzer::declareTopLevel(const RealmDecl* realm) {
     for (const auto& decl : realm->declarations) {
         if (auto* shape = dynamic_cast<ShapeDecl*>(decl.get())) {
@@ -322,8 +383,28 @@ void SemanticAnalyzer::analyzeFnDecl(FnDecl* fn) {
 
     const FnDecl* previousFunction = currentFunction;
     const FunctionSignature* previousSignature = currentSignature;
+    const auto previousViewReturnSourceParam = currentViewReturnSourceParam;
+    const bool previousViewReturnSeen = currentViewReturnSeen;
+    const int previousRawDepth = rawDepth;
     currentFunction = fn;
     currentSignature = lookupFunctionSignature(fn);
+    currentViewReturnSourceParam.reset();
+    currentViewReturnSeen = false;
+    rawDepth = 0;
+
+    if (currentSignature) {
+        if (currentSignature->returnType.viewKind == "edit") {
+            reportError(fn, "Safe functions cannot return edit views. Return an owned value or a look view derived from a parameter.");
+        }
+        for (size_t i = 0; i < fn->params.size() && i < currentSignature->paramTypes.size(); ++i) {
+            if (isRawAddressType(currentSignature->paramTypes[i])) {
+                reportError(fn->params[i].span, "Raw address types are not allowed in safe function parameters.");
+            }
+        }
+        if (isRawAddressType(currentSignature->returnType)) {
+            reportError(fn, "Raw address types are not allowed in safe function return types.");
+        }
+    }
 
     for (size_t i = 0; i < fn->params.size(); ++i) {
         const ResolvedType type = (currentSignature && i < currentSignature->paramTypes.size())
@@ -334,15 +415,30 @@ void SemanticAnalyzer::analyzeFnDecl(FnDecl* fn) {
             type,
             false,
             "Duplicate parameter name: " + fn->params[i].name,
-            fn->params[i].span);
+            fn->params[i].span,
+            type.isView() ? std::optional<size_t>(i) : std::nullopt);
     }
 
     if (fn->body) {
         analyzeBlock(fn->body.get());
     }
 
+    if (currentSignature && currentSignature->returnType.isView()) {
+        auto signatureIt = analysisResult.functionSignatures.find(fn);
+        if (signatureIt != analysisResult.functionSignatures.end()) {
+            signatureIt->second.viewReturnSourceParam = currentViewReturnSourceParam;
+            analysisResult.functionsByName[fn->name] = signatureIt->second;
+        }
+        if (!currentViewReturnSeen) {
+            reportError(fn, "View-returning functions must return a view derived from one of their view parameters.");
+        }
+    }
+
     currentFunction = previousFunction;
     currentSignature = previousSignature;
+    currentViewReturnSourceParam = previousViewReturnSourceParam;
+    currentViewReturnSeen = previousViewReturnSeen;
+    rawDepth = previousRawDepth;
     scopes.exitScope();
 }
 
@@ -408,12 +504,23 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             finalType = makeUnknownType();
         }
 
-        if (bind->type && bind->value && !canAssignType(valueType, finalType)) {
+        const bool bindingTypeMatches = finalType.isView()
+            ? canPassArgumentType(bind->value.get(), valueType, finalType)
+            : canAssignType(valueType, finalType);
+        if (bind->type && bind->value && !bindingTypeMatches) {
             reportError(
                 bind,
                 "Initializer type mismatch for '" + bind->name + "': expected " +
                     finalType.describe() + ", got " + valueType.describe());
         }
+
+        if (rawDepth == 0 && isRawAddressType(finalType)) {
+            reportError(bind, "Raw address values may only appear inside raw blocks.");
+        }
+
+        const std::optional<size_t> viewSourceParamIndex = (finalType.isView() && bind->value)
+            ? resolveViewSourceParam(bind->value.get())
+            : std::nullopt;
 
         analysisResult.bindingTypes[bind] = finalType;
         defineVariable(
@@ -421,13 +528,18 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             finalType,
             bind->isMutable,
             "Duplicate variable declaration: " + bind->name,
-            bind->span);
+            bind->span,
+            viewSourceParamIndex);
         return;
     }
 
     if (auto* assign = dynamic_cast<AssignStmt*>(stmt)) {
         const ResolvedType valueType = assign->value ? analyzeExpr(assign->value.get()) : makeUnknownType();
         const ResolvedType targetType = assign->target ? analyzeExpr(assign->target.get()) : makeUnknownType();
+
+        if (rawDepth == 0 && (isRawAddressType(valueType) || isRawAddressType(targetType))) {
+            reportError(assign, "Raw address values may only appear inside raw blocks.");
+        }
 
         if (auto* ident = dynamic_cast<IdentExpr*>(assign->target.get())) {
             const auto sym = lookupSymbol(ident->name);
@@ -440,11 +552,18 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                     reportError(assign, "Cannot assign to immutable binding: " + ident->name);
                 }
 
-                if (!canAssignType(valueType, sym->type)) {
+                const bool assignmentTypeMatches = sym->type.isView()
+                    ? canPassArgumentType(assign->value.get(), valueType, sym->type)
+                    : canAssignType(valueType, sym->type);
+                if (!assignmentTypeMatches) {
                     reportError(
                         assign,
                         "Assigned value type mismatch for '" + ident->name + "': expected " +
                             sym->type.describe() + ", got " + valueType.describe());
+                }
+
+                if (sym->type.isView()) {
+                    sym->viewSourceParamIndex = resolveViewSourceParam(assign->value.get());
                 }
             }
         } else if (auto* member = dynamic_cast<MemberExpr*>(assign->target.get())) {
@@ -480,18 +599,41 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
 
     if (auto* give = dynamic_cast<GiveStmt*>(stmt)) {
         const ResolvedType valueType = give->value ? analyzeExpr(give->value.get()) : makePlainType("Unit");
-        if (currentSignature && currentFunction && !canAssignType(valueType, currentSignature->returnType)) {
+        if (currentSignature && currentSignature->returnType.isView()) {
+            if (!canBorrowAsView(valueType, currentSignature->returnType)) {
+                reportError(
+                    give,
+                    "Return type mismatch in function '" + currentFunction->name + "': expected " +
+                        currentSignature->returnType.describe() + ", got " + valueType.describe());
+            }
+            const auto sourceParamIndex = give->value ? resolveViewSourceParam(give->value.get()) : std::nullopt;
+            if (!sourceParamIndex.has_value()) {
+                reportError(give, "Returned view must be derived from a view parameter. Views cannot escape local owners or temporaries.");
+            } else if (!currentViewReturnSeen) {
+                currentViewReturnSourceParam = sourceParamIndex;
+                currentViewReturnSeen = true;
+            } else if (currentViewReturnSourceParam != sourceParamIndex) {
+                reportError(give, "All returned views in a function must be derived from the same view parameter.");
+            }
+        } else if (currentSignature && currentFunction && !canAssignType(valueType, currentSignature->returnType)) {
             reportError(
                 give,
                 "Return type mismatch in function '" + currentFunction->name + "': expected " +
                     currentSignature->returnType.describe() + ", got " + valueType.describe());
+        }
+
+        if (rawDepth == 0 && isRawAddressType(valueType)) {
+            reportError(give, "Raw address values may only appear inside raw blocks.");
         }
         return;
     }
 
     if (auto* exprStmt = dynamic_cast<ExprStmt*>(stmt)) {
         if (exprStmt->expr) {
-            analyzeExpr(exprStmt->expr.get());
+            const ResolvedType exprType = analyzeExpr(exprStmt->expr.get());
+            if (rawDepth == 0 && isRawAddressType(exprType)) {
+                reportError(exprStmt, "Raw address values may only appear inside raw blocks.");
+            }
         }
         return;
     }
@@ -633,7 +775,9 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
 
     if (auto* raw = dynamic_cast<RawStmt*>(stmt)) {
         scopes.enterScope();
+        ++rawDepth;
         analyzeBlock(raw->body.get());
+        --rawDepth;
         scopes.exitScope();
         return;
     }
@@ -700,7 +844,22 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr) {
             if (auto* objectIdent = dynamic_cast<IdentExpr*>(member->object.get())) {
                 const auto sym = lookupSymbol(objectIdent->name);
                 if (sym && sym->kind == SymbolKind::Module) {
-                    externalCall = true;
+                    if (sym->moduleInfo) {
+                        const auto exported = sym->moduleInfo->exportedItems.find(member->member);
+                        if (exported != sym->moduleInfo->exportedItems.end()) {
+                            if (exported->second.kind == SymbolKind::Function && exported->second.functionSignature.has_value()) {
+                                signature = &*exported->second.functionSignature;
+                            } else if (exported->second.kind != SymbolKind::Function) {
+                                reportError(call, "Module member is not callable: " + objectIdent->name + "." + member->member);
+                            } else {
+                                externalCall = true;
+                            }
+                        } else {
+                            externalCall = true;
+                        }
+                    } else {
+                        externalCall = true;
+                    }
                 }
             }
         }
@@ -710,9 +869,12 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr) {
         if (signature) {
             if (call->args.size() != signature->paramTypes.size()) {
                 if (!signature->isExternal || signature->paramTypes.size() != 1) {
+                    const std::string calleeName = dynamic_cast<IdentExpr*>(call->callee.get())
+                        ? dynamic_cast<IdentExpr*>(call->callee.get())->name
+                        : describeCalleeExpr(call->callee.get());
                     reportError(
                         call,
-                        "Call to '" + dynamic_cast<IdentExpr*>(call->callee.get())->name + "' expects " +
+                        "Call to '" + calleeName + "' expects " +
                             std::to_string(signature->paramTypes.size()) + " argument(s), got " +
                             std::to_string(call->args.size()));
                 }
@@ -720,7 +882,14 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr) {
 
             for (size_t i = 0; i < call->args.size(); ++i) {
                 const ResolvedType argType = analyzeExpr(call->args[i].get());
-                if (i < signature->paramTypes.size() && !canAssignType(argType, signature->paramTypes[i])) {
+                if (rawDepth == 0 &&
+                    ((i < signature->paramTypes.size() && isRawAddressType(signature->paramTypes[i])) ||
+                     isRawAddressType(argType))) {
+                    reportError(
+                        call->args[i].get(),
+                        "Raw address values may only cross call boundaries inside raw blocks.");
+                }
+                if (i < signature->paramTypes.size() && !canPassArgumentType(call->args[i].get(), argType, signature->paramTypes[i])) {
                     reportError(
                         call->args[i].get(),
                         "Call argument type mismatch: expected " + signature->paramTypes[i].describe() +
@@ -749,7 +918,21 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr) {
         if (auto* objectIdent = dynamic_cast<IdentExpr*>(member->object.get())) {
             const auto sym = lookupSymbol(objectIdent->name);
             if (sym && sym->kind == SymbolKind::Module) {
-                type = makeUnknownType(member->member);
+                if (sym->moduleInfo) {
+                    const auto exported = sym->moduleInfo->exportedItems.find(member->member);
+                    if (exported != sym->moduleInfo->exportedItems.end()) {
+                        if (exported->second.kind == SymbolKind::Shape || exported->second.kind == SymbolKind::Choice) {
+                            type.name = exported->second.name;
+                            type.category = TypeCategory::Owned;
+                        } else {
+                            type = makeUnknownType(member->member);
+                        }
+                    } else {
+                        type = makeUnknownType(member->member);
+                    }
+                } else {
+                    type = makeUnknownType(member->member);
+                }
                 analysisResult.exprTypes[expr] = type;
                 return type;
             }
@@ -783,17 +966,159 @@ std::shared_ptr<Symbol> SemanticAnalyzer::lookupSymbol(const std::string& name) 
     return const_cast<ScopeTree&>(scopes).lookup(name);
 }
 
+std::optional<size_t> SemanticAnalyzer::resolveViewSourceParam(const Expr* expr) const {
+    if (!expr) {
+        return std::nullopt;
+    }
+
+    if (auto* ident = dynamic_cast<const IdentExpr*>(expr)) {
+        const auto sym = lookupSymbol(ident->name);
+        if (sym && sym->kind == SymbolKind::Variable) {
+            return sym->viewSourceParamIndex;
+        }
+        return std::nullopt;
+    }
+
+    if (auto* member = dynamic_cast<const MemberExpr*>(expr)) {
+        return resolveViewSourceParam(member->object.get());
+    }
+
+    if (auto* call = dynamic_cast<const CallExpr*>(expr)) {
+        const FunctionSignature* signature = nullptr;
+
+        if (auto* calleeIdent = dynamic_cast<const IdentExpr*>(call->callee.get())) {
+            signature = lookupFunctionSignature(calleeIdent->name);
+        } else if (auto* member = dynamic_cast<const MemberExpr*>(call->callee.get())) {
+            if (auto* objectIdent = dynamic_cast<const IdentExpr*>(member->object.get())) {
+                const auto sym = lookupSymbol(objectIdent->name);
+                if (sym && sym->kind == SymbolKind::Module && sym->moduleInfo) {
+                    const auto exported = sym->moduleInfo->exportedItems.find(member->member);
+                    if (exported != sym->moduleInfo->exportedItems.end() &&
+                        exported->second.kind == SymbolKind::Function &&
+                        exported->second.functionSignature.has_value()) {
+                        signature = &*exported->second.functionSignature;
+                    }
+                }
+            }
+        }
+
+        if (!signature || !signature->returnType.isView() || !signature->viewReturnSourceParam.has_value()) {
+            return std::nullopt;
+        }
+
+        const size_t sourceIndex = *signature->viewReturnSourceParam;
+        if (sourceIndex >= call->args.size()) {
+            return std::nullopt;
+        }
+        return resolveViewSourceParam(call->args[sourceIndex].get());
+    }
+
+    return std::nullopt;
+}
+
+bool SemanticAnalyzer::canBorrowAsView(const ResolvedType& from, const ResolvedType& to) const {
+    if (!to.isView()) {
+        return false;
+    }
+
+    if (from.isUnknown() || to.isUnknown()) {
+        return true;
+    }
+
+    if (!(from.isOwned() || from.isView())) {
+        return false;
+    }
+
+    if (from.name != to.name || from.params.size() != to.params.size()) {
+        return false;
+    }
+
+    for (size_t i = 0; i < from.params.size(); ++i) {
+        if (!sameType(from.params[i], to.params[i])) {
+            return false;
+        }
+    }
+
+    if (from.isOwned()) {
+        return true;
+    }
+
+    if (from.viewKind == to.viewKind) {
+        return true;
+    }
+
+    return from.viewKind == "edit" && to.viewKind == "look";
+}
+
+bool SemanticAnalyzer::canPassArgumentType(Expr* expr, const ResolvedType& from, const ResolvedType& to) const {
+    if (canAssignType(from, to)) {
+        return true;
+    }
+
+    if (!to.isView() || !canBorrowAsView(from, to)) {
+        return false;
+    }
+
+    if (to.viewKind != "edit") {
+        return true;
+    }
+
+    if (from.isView()) {
+        return from.viewKind == "edit";
+    }
+
+    return canBorrowExprAsEdit(expr);
+}
+
+bool SemanticAnalyzer::canBorrowExprAsEdit(const Expr* expr) const {
+    if (!expr) {
+        return false;
+    }
+
+    if (auto* ident = dynamic_cast<const IdentExpr*>(expr)) {
+        const auto sym = lookupSymbol(ident->name);
+        if (!sym || sym->kind != SymbolKind::Variable) {
+            return false;
+        }
+        if (sym->type.isView()) {
+            return sym->type.viewKind == "edit";
+        }
+        return sym->isMutable && sym->type.isOwned();
+    }
+
+    if (auto* member = dynamic_cast<const MemberExpr*>(expr)) {
+        if (const auto* objectType = lookupExprType(member->object.get())) {
+            if (objectType->isView()) {
+                return objectType->viewKind == "edit";
+            }
+        }
+
+        if (auto* objectIdent = dynamic_cast<const IdentExpr*>(member->object.get())) {
+            const auto sym = lookupSymbol(objectIdent->name);
+            return sym && sym->kind == SymbolKind::Variable && sym->isMutable && sym->type.isOwned();
+        }
+    }
+
+    return false;
+}
+
+bool SemanticAnalyzer::isRawAddressType(const ResolvedType& type) const {
+    return isRawAddressTypeName(type.name);
+}
+
 void SemanticAnalyzer::defineVariable(
     const std::string& name,
     const ResolvedType& type,
     bool isMutable,
     const std::string& duplicateMessage,
-    const SourceSpan& duplicateSpan) {
+    const SourceSpan& duplicateSpan,
+    std::optional<size_t> viewSourceParamIndex) {
     auto sym = std::make_shared<Symbol>();
     sym->name = name;
     sym->kind = SymbolKind::Variable;
     sym->isMutable = isMutable;
     sym->type = type;
+    sym->viewSourceParamIndex = viewSourceParamIndex;
 
     if (!scopes.define(name, sym)) {
         reportError(duplicateSpan, duplicateMessage);

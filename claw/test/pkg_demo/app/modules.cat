@@ -1,1 +1,1 @@
-pub modules {main, util, runtime}
+pub modules {main, util, runtime, api}

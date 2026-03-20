@@ -80,10 +80,9 @@ std::string describePathKind(const std::filesystem::path& path) {
     return "other";
 }
 
-bool openSourceFile(
+bool resolveInputPath(
     const std::string& rawPath,
-    std::ifstream* file,
-    std::filesystem::path* openedPath,
+    std::filesystem::path* resolvedPath,
     std::vector<std::filesystem::path>* triedPaths) {
     const auto candidates = buildCandidatePaths(rawPath);
     if (triedPaths) {
@@ -91,11 +90,10 @@ bool openSourceFile(
     }
 
     for (const auto& candidate : candidates) {
-        std::ifstream attempt(candidate, std::ios::binary);
-        if (attempt.is_open()) {
-            *file = std::move(attempt);
-            if (openedPath) {
-                *openedPath = candidate;
+        std::error_code ec;
+        if (std::filesystem::exists(candidate, ec)) {
+            if (resolvedPath) {
+                *resolvedPath = candidate;
             }
             return true;
         }
@@ -105,7 +103,7 @@ bool openSourceFile(
 }
 
 void printOpenFailure(const std::string& rawPath, const std::vector<std::filesystem::path>& triedPaths) {
-    std::cerr << "Failed to open source file.\n";
+    std::cerr << "Failed to resolve input path.\n";
     std::cerr << "  requested path: " << rawPath << "\n";
 
     std::error_code ec;
@@ -187,11 +185,15 @@ void validateEntryPoint(
     const claw::frontend::LoadedProject& project,
     const claw::frontend::SemanticAnalyzer& sema,
     bool requireEntry) {
-    if (!requireEntry && !project.manifestPath.has_value()) {
+    const auto& unit = project.units[project.entryIndex];
+    const bool isRootMainEntry = project.structuredPackage &&
+        unit.path.filename() == "main.cat" &&
+        unit.path.parent_path().lexically_normal() == project.packageRoot.lexically_normal();
+
+    if (!requireEntry && !isRootMainEntry) {
         return;
     }
 
-    const auto& unit = project.units[project.entryIndex];
     const auto* realm = unit.ast.get();
     const claw::frontend::FnDecl* entryFn = nullptr;
     for (const auto& decl : realm->declarations) {
@@ -206,7 +208,7 @@ void validateEntryPoint(
     if (!entryFn) {
         claw::frontend::Diagnostic diagnostic;
         diagnostic.stage = "entry";
-        diagnostic.message = "Entry module must define `fn main() -> Int32` or `fn main()` .";
+        diagnostic.message = "Entry module must define `fn main() -> Int32` or `fn main()`.";
         diagnostic.span = realm->span;
         diagnostic.path = unit.path.string();
         throw claw::frontend::DiagnosticError("Entry point validation failed.", {diagnostic});
@@ -225,14 +227,13 @@ void validateEntryPoint(
         throw claw::frontend::DiagnosticError("Entry point validation failed.", {diagnostic});
     }
 }
-
 void printUsage() {
-    std::cout << "Usage: claw <command> <file.cat|modules.cat>\n"
+    std::cout << "Usage: claw <command> <file.cat|workspace|config>\n"
               << "Commands:\n"
               << "  check      Parse and validate semantics + ownership\n"
               << "  emit-air   Emit analyzed IR view after semantic analysis\n"
               << "  emit-oir   Emit lowered OIR view closer to backend\n"
-              << "  build      Validate an entry graph ready for backend lowering\n";
+              << "  build      Validate a workspace entry graph rooted at main.cat\n";
 }
 
 } // namespace
@@ -252,17 +253,16 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::ifstream file;
     std::filesystem::path openedPath;
     std::vector<std::filesystem::path> triedPaths;
-    if (!openSourceFile(filepath, &file, &openedPath, &triedPaths)) {
+    if (!resolveInputPath(filepath, &openedPath, &triedPaths)) {
         printOpenFailure(filepath, triedPaths);
         return 1;
     }
 
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    const std::string source = buffer.str();
+    const std::string source = std::filesystem::is_regular_file(openedPath)
+        ? readFileBestEffort(openedPath.string())
+        : std::string{};
     const std::string diagnosticPath = openedPath.empty() ? filepath : openedPath.string();
 
     try {
@@ -300,13 +300,27 @@ int main(int argc, char** argv) {
         }
 
         if (command == "emit-oir") {
-            claw::frontend::OirEmitter oir(*analyzers[project.entryIndex]);
-            std::cout << oir.emit(project.units[project.entryIndex].ast.get());
+            if (project.structuredPackage && project.units[project.entryIndex].path.filename() == "main.cat" && project.units[project.entryIndex].path.parent_path().lexically_normal() == project.packageRoot.lexically_normal()) {
+                std::vector<claw::frontend::OirUnitView> units;
+                units.reserve(project.units.size());
+                for (size_t i = 0; i < project.units.size(); ++i) {
+                    units.push_back(claw::frontend::OirUnitView{project.units[i].ast.get(), analyzers[i].get()});
+                }
+                std::cout << claw::frontend::emitOirProgram(project.units[project.entryIndex].ast->name, units);
+            } else {
+                claw::frontend::OirEmitter oir(*analyzers[project.entryIndex]);
+                std::cout << oir.emit(project.units[project.entryIndex].ast.get());
+            }
             return 0;
         }
 
         if (command == "build") {
-            std::cout << "Build graph validated for entry realm: "
+            std::cout << "Build graph validated";
+            if (project.config.has_value()) {
+                std::cout << " for project " << project.config->name
+                          << " (edition " << project.config->edition << ")";
+            }
+            std::cout << ", entry realm: "
                       << project.units[project.entryIndex].ast->name << "\n";
             return 0;
         }

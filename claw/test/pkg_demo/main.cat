@@ -1,8 +1,8 @@
-realm app.main
+realm main
 
-import super.{util}
-import app.runtime.{banner}
-import app.api.{Config, Signal, add}
+import term.{emit}
+import src.{util, runtime}
+import src.api.{Config, Signal, add}
 
 fn inspect(cfg: Config) -> Int32 {
     give cfg.port
@@ -20,6 +20,7 @@ fn unwrap(signal: Signal) -> Int32 {
 }
 
 fn main() -> Int32 {
-    banner()
+    emit("boot")
+    runtime.banner()
     give add(util.answer(), 1)
 }

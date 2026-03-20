@@ -482,3 +482,24 @@ bool OirEmitter::stmtDefinitelyTerminates(const Stmt* stmt) const {
 }
 
 } // namespace claw::frontend
+std::string claw::frontend::emitOirProgram(std::string_view entryRealm, const std::vector<OirUnitView>& units) {
+    std::ostringstream out;
+    out << "oir.program entry " << (entryRealm.empty() ? "<unknown>" : std::string(entryRealm)) << "\n";
+
+    for (size_t i = 0; i < units.size(); ++i) {
+        if (i > 0) {
+            out << "\n";
+        }
+
+        const auto& unit = units[i];
+        if (!unit.realm || !unit.sema) {
+            out << "oir.realm <unknown>\n";
+            continue;
+        }
+
+        OirEmitter emitter(*unit.sema);
+        out << emitter.emit(unit.realm);
+    }
+
+    return out.str();
+}

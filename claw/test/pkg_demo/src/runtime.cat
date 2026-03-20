@@ -1,0 +1,5 @@
+realm src.runtime
+
+share fn banner() {
+    println("boot")
+}

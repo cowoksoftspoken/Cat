@@ -21,11 +21,19 @@ struct LoadedUnit {
     std::vector<ImportedBinding> importedBindings;
 };
 
+struct ProjectConfig {
+    std::filesystem::path path;
+    std::string name;
+    std::string version;
+    std::string edition;
+    std::unordered_map<std::string, std::string> dependencies;
+};
+
 struct LoadedProject {
     std::filesystem::path packageRoot;
     std::filesystem::path inputPath;
-    std::optional<std::filesystem::path> manifestPath;
-    std::optional<std::string> entryRealm;
+    std::optional<std::filesystem::path> configPath;
+    std::optional<ProjectConfig> config;
     bool structuredPackage = false;
     size_t entryIndex = 0;
     std::vector<LoadedUnit> units;
@@ -40,11 +48,10 @@ private:
         std::filesystem::path path;
         std::string source;
         std::unordered_set<std::string> publishedModules;
-        std::optional<std::string> entryRealm;
     };
 
     struct ExportSummary {
-        std::unordered_map<std::string, SymbolKind> sharedItems;
+        std::unordered_map<std::string, ImportedBinding> sharedItems;
     };
 
     LoadedProject project;
@@ -54,8 +61,11 @@ private:
     std::unordered_set<std::string> loadStack;
 
     std::filesystem::path normalizePath(const std::filesystem::path& path) const;
-    std::filesystem::path findPackageRoot(const std::filesystem::path& startDir) const;
+    std::optional<std::filesystem::path> findWorkspaceRoot(const std::filesystem::path& startDir) const;
+    std::optional<std::filesystem::path> detectWorkspaceConfig(const std::filesystem::path& rootDir) const;
+    bool isSupportedConfigFile(const std::filesystem::path& path) const;
     std::string readFileText(const std::filesystem::path& path) const;
+    ProjectConfig loadProjectConfig(const std::filesystem::path& path) const;
     std::unique_ptr<RealmDecl> parseSourceFile(const std::filesystem::path& path, const std::string& source) const;
     ModuleManifest loadManifest(const std::filesystem::path& path);
     std::optional<ModuleManifest> tryLoadManifest(const std::filesystem::path& path);
@@ -64,7 +74,7 @@ private:
     size_t loadUnitRecursive(const std::filesystem::path& sourcePath);
     std::vector<ImportedBinding> resolveImports(const LoadedUnit& unit);
 
-    std::filesystem::path resolveEntryPath(const ModuleManifest& manifest);
+    std::filesystem::path resolveWorkspaceEntryPath(const std::filesystem::path& workspaceRoot) const;
     std::optional<std::filesystem::path> tryResolveRealmFile(const std::vector<std::string>& segments);
     std::optional<std::filesystem::path> tryResolveNamespaceDir(const std::vector<std::string>& segments);
     std::filesystem::path resolveSiblingModule(const std::filesystem::path& importerPath, const std::string& name);

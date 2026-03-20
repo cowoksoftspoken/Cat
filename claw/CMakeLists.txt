@@ -15,8 +15,10 @@ add_library(claw_frontend
     src/analysis/sema.cpp
     src/analysis/ownership.cpp
     src/module/project.cpp
+    src/module/project_config.cpp
 )
 target_include_directories(claw_frontend PUBLIC src)
 
 add_executable(claw src/driver/main.cpp)
 target_link_libraries(claw PRIVATE claw_frontend)
+

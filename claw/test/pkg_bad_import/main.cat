@@ -1,0 +1,7 @@
+realm main
+
+import src.api.{add}
+
+fn main() -> Int32 {
+    give add("oops", 1)
+}

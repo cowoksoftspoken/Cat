@@ -1,0 +1,19 @@
+realm test.view_borrow_ownership
+
+fn consume_text(text: Text) {
+}
+
+fn take_edit(text: edit Text) {
+}
+
+fn move_while_look_alive() {
+    slot message: Text = "hello"
+    hold view: look Text = message
+    consume_text(message)
+}
+
+fn edit_while_look_alive() {
+    slot message: Text = "hello"
+    hold snapshot: look Text = message
+    take_edit(message)
+}

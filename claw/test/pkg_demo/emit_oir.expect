@@ -1,0 +1,44 @@
+oir.program entry main
+oir.realm main
+oir.fn inspect(cfg: Config) -> Int32
+  block entry:
+    %t0 = field cfg.port : Int32
+    return %t0 : Int32
+oir.fn unwrap(signal: Signal) -> Int32
+  block entry:
+    pick signal : Signal
+    case ready -> pick_ready_1
+    case failed(code) -> pick_failed_2
+  block pick_ready_1:
+    return 0 : Int32
+  block pick_failed_2:
+    return code : Int32
+oir.fn main() -> Int32
+  block entry:
+    %t0 = call emit("boot") : <unknown>
+    discard %t0 : <unknown>
+    call runtime.banner() : Unit
+    %t1 = call util.answer() : Int32
+    %t2 = call add(%t1, 1) : Int32
+    return %t2 : Int32
+
+oir.realm src.util
+oir.fn answer() -> Int32
+  block entry:
+    return 7 : Int32
+
+oir.realm src.runtime
+oir.fn banner() -> Unit
+  block entry:
+    call println("boot") : Unit
+
+oir.realm src.api
+oir.shape Config
+  field port: Int32
+oir.choice Signal
+  case ready
+  case failed(Int32)
+oir.fn add(base: Int32, extra: Int32) -> Int32
+  block entry:
+    %t0 = add base, extra : Int32
+    return %t0 : Int32

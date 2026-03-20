@@ -30,6 +30,7 @@ public:
     const AnalysisResult& result() const;
     const FunctionSignature* lookupFunctionSignature(const FnDecl* fn) const;
     const FunctionSignature* lookupFunctionSignature(const std::string& name) const;
+    const FunctionSignature* lookupCallableSignature(const Expr* callee) const;
     const ResolvedType* lookupExprType(const Expr* expr) const;
     const ShapeInfo* lookupShape(const std::string& name) const;
     const ChoiceInfo* lookupChoice(const std::string& name) const;
@@ -42,7 +43,10 @@ private:
     std::vector<ImportedBinding> importedBindings;
     const FnDecl* currentFunction = nullptr;
     const FunctionSignature* currentSignature = nullptr;
+    std::optional<size_t> currentViewReturnSourceParam;
+    bool currentViewReturnSeen = false;
     int loopDepth = 0;
+    int rawDepth = 0;
 
     void reportError(const std::string& msg);
     void reportError(const SourceSpan& span, const std::string& msg);
@@ -70,6 +74,11 @@ private:
         const std::vector<std::string>& paramNames,
         const std::vector<ResolvedType>& argTypes,
         const std::string& context);
+    std::optional<size_t> resolveViewSourceParam(const Expr* expr) const;
+    bool canBorrowAsView(const ResolvedType& from, const ResolvedType& to) const;
+    bool canPassArgumentType(Expr* expr, const ResolvedType& from, const ResolvedType& to) const;
+    bool canBorrowExprAsEdit(const Expr* expr) const;
+    bool isRawAddressType(const ResolvedType& type) const;
 
     std::shared_ptr<Symbol> lookupSymbol(const std::string& name) const;
     void defineVariable(
@@ -77,7 +86,8 @@ private:
         const ResolvedType& type,
         bool isMutable,
         const std::string& duplicateMessage,
-        const SourceSpan& duplicateSpan = {});
+        const SourceSpan& duplicateSpan = {},
+        std::optional<size_t> viewSourceParamIndex = std::nullopt);
     bool isConditionLike(const ResolvedType& type) const;
     bool blockDefinitelyTerminates(const BlockStmt* block) const;
     bool stmtDefinitelyTerminates(const Stmt* stmt) const;

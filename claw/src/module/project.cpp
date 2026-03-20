@@ -6,6 +6,7 @@
 #include "parser/parser.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <fstream>
 #include <sstream>
@@ -69,6 +70,59 @@ std::string removeLineComment(std::string_view line) {
     return trim(comment == std::string_view::npos ? line : line.substr(0, comment));
 }
 
+ResolvedType makePlainResolvedType(const std::string& name) {
+    ResolvedType type;
+    type.name = name;
+    type.category = TypeCategory::Plain;
+    return type;
+}
+
+TypeCatalog buildExportTypeCatalog(const LoadedUnit& unit) {
+    TypeCatalog catalog;
+
+    for (const auto& binding : unit.importedBindings) {
+        if (binding.kind == SymbolKind::Shape) {
+            catalog.registerShapeName(
+                binding.name,
+                binding.shapeInfo.has_value()
+                    ? std::optional<size_t>(binding.shapeInfo->typeParams.size())
+                    : std::nullopt);
+        } else if (binding.kind == SymbolKind::Choice) {
+            catalog.registerChoiceName(
+                binding.name,
+                binding.choiceInfo.has_value()
+                    ? std::optional<size_t>(binding.choiceInfo->typeParams.size())
+                    : std::nullopt);
+        }
+    }
+
+    if (!unit.ast) {
+        return catalog;
+    }
+
+    for (const auto& decl : unit.ast->declarations) {
+        if (auto* shape = dynamic_cast<const ShapeDecl*>(decl.get())) {
+            catalog.registerShapeName(shape->name, shape->typeParams.size());
+        } else if (auto* choice = dynamic_cast<const ChoiceDecl*>(decl.get())) {
+            catalog.registerChoiceName(choice->name, choice->typeParams.size());
+        }
+    }
+
+    return catalog;
+}
+
+void attachDiagnosticPath(std::vector<Diagnostic>* diagnostics, const std::filesystem::path& path) {
+    if (!diagnostics) {
+        return;
+    }
+
+    for (auto& diagnostic : *diagnostics) {
+        if (diagnostic.path.empty()) {
+            diagnostic.path = path.string();
+        }
+    }
+}
+
 } // namespace
 
 std::filesystem::path ProjectLoader::normalizePath(const std::filesystem::path& path) const {
@@ -77,13 +131,12 @@ std::filesystem::path ProjectLoader::normalizePath(const std::filesystem::path& 
     return (ec ? path : absolute).lexically_normal();
 }
 
-std::filesystem::path ProjectLoader::findPackageRoot(const std::filesystem::path& startDir) const {
-    std::filesystem::path best;
+std::optional<std::filesystem::path> ProjectLoader::findWorkspaceRoot(const std::filesystem::path& startDir) const {
     auto current = normalizePath(startDir);
 
     while (!current.empty()) {
-        if (std::filesystem::exists(current / "modules.cat")) {
-            best = current;
+        if (std::filesystem::exists(current / "main.cat")) {
+            return current;
         }
         if (current == current.root_path()) {
             break;
@@ -91,9 +144,33 @@ std::filesystem::path ProjectLoader::findPackageRoot(const std::filesystem::path
         current = current.parent_path();
     }
 
-    return best.empty() ? normalizePath(startDir) : best;
+    return std::nullopt;
 }
 
+std::optional<std::filesystem::path> ProjectLoader::detectWorkspaceConfig(const std::filesystem::path& rootDir) const {
+    static const std::array<const char*, 6> preferredNames = {
+        "claw.toml",
+        "claw.yaml",
+        "claw.yml",
+        "project.toml",
+        "project.yaml",
+        "project.yml",
+    };
+
+    for (const auto* name : preferredNames) {
+        const auto candidate = normalizePath(rootDir / name);
+        if (std::filesystem::exists(candidate) && std::filesystem::is_regular_file(candidate)) {
+            return candidate;
+        }
+    }
+
+    return std::nullopt;
+}
+
+bool ProjectLoader::isSupportedConfigFile(const std::filesystem::path& path) const {
+    const auto extension = path.extension().string();
+    return extension == ".toml" || extension == ".yaml" || extension == ".yml";
+}
 std::string ProjectLoader::readFileText(const std::filesystem::path& path) const {
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {
@@ -182,28 +259,11 @@ ProjectLoader::ModuleManifest ProjectLoader::loadManifest(const std::filesystem:
         }
 
         if (line.rfind("pub entry", 0) == 0) {
-            const std::string value = trim(std::string_view(line).substr(std::string_view("pub entry").size()));
-            if (value.empty()) {
-                diagnostics.push_back(Diagnostic{"manifest", "Expected entry realm after 'pub entry'.", {lineNumber, 1, line.size()}, normalized.string()});
-                continue;
-            }
-
-            bool valid = true;
-            for (const auto& segment : splitRealmPath(value)) {
-                if (!isIdentifier(segment)) {
-                    valid = false;
-                    break;
-                }
-            }
-            if (!valid) {
-                diagnostics.push_back(Diagnostic{"manifest", "Invalid entry realm: '" + value + "'.", {lineNumber, 1, line.size()}, normalized.string()});
-                continue;
-            }
-            if (manifest.entryRealm.has_value()) {
-                diagnostics.push_back(Diagnostic{"manifest", "Duplicate 'pub entry' declaration.", {lineNumber, 1, line.size()}, normalized.string()});
-                continue;
-            }
-            manifest.entryRealm = value;
+            diagnostics.push_back(Diagnostic{
+                "manifest",
+                "Entry is defined by root main.cat. modules.cat only supports 'pub modules { ... }'.",
+                {lineNumber, 1, line.size()},
+                normalized.string()});
             continue;
         }
 
@@ -217,7 +277,6 @@ ProjectLoader::ModuleManifest ProjectLoader::loadManifest(const std::filesystem:
     manifestCache[key] = manifest;
     return manifest;
 }
-
 std::optional<ProjectLoader::ModuleManifest> ProjectLoader::tryLoadManifest(const std::filesystem::path& path) {
     const auto normalized = normalizePath(path);
     if (!std::filesystem::exists(normalized)) {
@@ -245,17 +304,31 @@ bool ProjectLoader::isExternalRoot(const std::vector<std::string>& segments) con
     if (segments.empty()) {
         return false;
     }
-    return segments.front() == "core" || segments.front() == "std" || segments.front() == "sys";
+
+    const std::string& root = segments.front();
+    if (root == "core" || root == "std" || root == "sys") {
+        return true;
+    }
+
+    return project.config.has_value() && project.config->dependencies.find(root) != project.config->dependencies.end();
 }
 
 std::optional<std::filesystem::path> ProjectLoader::tryResolveNamespaceDir(const std::vector<std::string>& segments) {
     auto currentDir = project.packageRoot;
     for (const auto& segment : segments) {
-        const auto manifestOpt = tryLoadManifest(currentDir / "modules.cat");
-        if (!manifestOpt.has_value() || manifestOpt->publishedModules.find(segment) == manifestOpt->publishedModules.end()) {
+        const auto candidateDir = normalizePath(currentDir / segment);
+        if (!std::filesystem::exists(candidateDir) || !std::filesystem::is_directory(candidateDir)) {
             return std::nullopt;
         }
-        currentDir /= segment;
+
+        if (currentDir != project.packageRoot) {
+            const auto manifestOpt = tryLoadManifest(currentDir / "modules.cat");
+            if (!manifestOpt.has_value() || manifestOpt->publishedModules.find(segment) == manifestOpt->publishedModules.end()) {
+                return std::nullopt;
+            }
+        }
+
+        currentDir = candidateDir;
     }
     return normalizePath(currentDir);
 }
@@ -277,15 +350,18 @@ std::optional<std::filesystem::path> ProjectLoader::tryResolveRealmFile(const st
         return std::nullopt;
     }
 
-    const auto manifestOpt = tryLoadManifest(parentDir.value() / "modules.cat");
-    if (manifestOpt.has_value() && manifestOpt->publishedModules.find(segments.back()) == manifestOpt->publishedModules.end()) {
-        return std::nullopt;
+    if (parentDir.value() != project.packageRoot) {
+        const auto manifestOpt = tryLoadManifest(parentDir.value() / "modules.cat");
+        if (!manifestOpt.has_value() || manifestOpt->publishedModules.find(segments.back()) == manifestOpt->publishedModules.end()) {
+            return std::nullopt;
+        }
     }
 
     const auto candidate = normalizePath(parentDir.value() / (segments.back() + ".cat"));
-    return std::filesystem::exists(candidate) ? std::optional<std::filesystem::path>(candidate) : std::nullopt;
+    return (std::filesystem::exists(candidate) && std::filesystem::is_regular_file(candidate))
+        ? std::optional<std::filesystem::path>(candidate)
+        : std::nullopt;
 }
-
 std::filesystem::path ProjectLoader::resolveSiblingModule(
     const std::filesystem::path& importerPath,
     const std::string& name) {
@@ -340,18 +416,78 @@ ProjectLoader::ExportSummary ProjectLoader::buildExportSummary(const LoadedUnit&
     }
 
     ExportSummary summary;
+    if (!unit.ast) {
+        exportCache[key] = summary;
+        return summary;
+    }
+
+    TypeCatalog catalog = buildExportTypeCatalog(unit);
+    std::vector<Diagnostic> diagnostics;
+
     for (const auto& decl : unit.ast->declarations) {
         if (!decl->isShared) {
             continue;
         }
 
         if (auto* fn = dynamic_cast<const FnDecl*>(decl.get())) {
-            summary.sharedItems[fn->name] = SymbolKind::Function;
-        } else if (auto* shape = dynamic_cast<const ShapeDecl*>(decl.get())) {
-            summary.sharedItems[shape->name] = SymbolKind::Shape;
-        } else if (auto* choice = dynamic_cast<const ChoiceDecl*>(decl.get())) {
-            summary.sharedItems[choice->name] = SymbolKind::Choice;
+            ImportedBinding binding;
+            binding.name = fn->name;
+            binding.kind = SymbolKind::Function;
+
+            FunctionSignature signature;
+            signature.isExternal = true;
+            for (const auto& param : fn->params) {
+                signature.paramTypes.push_back(catalog.resolveType(param.type.get(), {}, &diagnostics));
+            }
+            signature.returnType = fn->returnType
+                ? catalog.resolveType(fn->returnType.get(), {}, &diagnostics)
+                : makePlainResolvedType("Unit");
+            binding.functionSignature = std::move(signature);
+            summary.sharedItems[fn->name] = std::move(binding);
+            continue;
         }
+
+        if (auto* shape = dynamic_cast<const ShapeDecl*>(decl.get())) {
+            ImportedBinding binding;
+            binding.name = shape->name;
+            binding.kind = SymbolKind::Shape;
+
+            ShapeInfo info;
+            info.typeParams = shape->typeParams;
+            std::unordered_set<std::string> localTypeParams(shape->typeParams.begin(), shape->typeParams.end());
+            for (const auto& field : shape->fields) {
+                info.fields[field.name] = catalog.resolveType(field.type.get(), localTypeParams, &diagnostics);
+                info.fieldOrder.push_back(field.name);
+            }
+            binding.shapeInfo = std::move(info);
+            summary.sharedItems[shape->name] = std::move(binding);
+            continue;
+        }
+
+        if (auto* choice = dynamic_cast<const ChoiceDecl*>(decl.get())) {
+            ImportedBinding binding;
+            binding.name = choice->name;
+            binding.kind = SymbolKind::Choice;
+
+            ChoiceInfo info;
+            info.typeParams = choice->typeParams;
+            std::unordered_set<std::string> localTypeParams(choice->typeParams.begin(), choice->typeParams.end());
+            for (const auto& variant : choice->variants) {
+                ChoiceVariantInfo variantInfo;
+                for (const auto& payload : variant.payloads) {
+                    variantInfo.payloadTypes.push_back(catalog.resolveType(payload.type.get(), localTypeParams, &diagnostics));
+                }
+                info.variants[variant.tag] = std::move(variantInfo);
+                info.variantOrder.push_back(variant.tag);
+            }
+            binding.choiceInfo = std::move(info);
+            summary.sharedItems[choice->name] = std::move(binding);
+        }
+    }
+
+    attachDiagnosticPath(&diagnostics, unit.path);
+    if (!diagnostics.empty()) {
+        throwDiagnostics(std::move(diagnostics));
     }
 
     exportCache[key] = summary;
@@ -392,11 +528,23 @@ std::vector<ImportedBinding> ProjectLoader::resolveImports(const LoadedUnit& uni
     const auto importerPath = unit.path;
     const auto imports = unit.ast ? unit.ast->imports : std::vector<ImportDecl>{};
 
+    auto makeModuleBinding = [&](const std::string& name, size_t unitIndex) {
+        ImportedBinding binding;
+        binding.name = name;
+        binding.kind = SymbolKind::Module;
+
+        auto moduleInfo = std::make_shared<ModuleInfo>();
+        moduleInfo->realmName = project.units[unitIndex].ast ? project.units[unitIndex].ast->name : std::string{};
+        moduleInfo->exportedItems = buildExportSummary(project.units[unitIndex]).sharedItems;
+        binding.moduleInfo = std::move(moduleInfo);
+        return binding;
+    };
+
     for (const auto& imp : imports) {
         if (imp.isSuper) {
             for (const auto& item : imp.specificItems) {
-                loadUnitRecursive(resolveSiblingModule(importerPath, item));
-                bindings.push_back(ImportedBinding{item, SymbolKind::Module});
+                const size_t moduleIndex = loadUnitRecursive(resolveSiblingModule(importerPath, item));
+                bindings.push_back(makeModuleBinding(item, moduleIndex));
             }
             continue;
         }
@@ -405,8 +553,8 @@ std::vector<ImportedBinding> ProjectLoader::resolveImports(const LoadedUnit& uni
         if (imp.specificItems.empty()) {
             const auto resolved = tryResolveRealmFile(baseSegments);
             if (resolved.has_value()) {
-                loadUnitRecursive(resolved.value());
-                bindings.push_back(ImportedBinding{baseSegments.back(), SymbolKind::Module});
+                const size_t moduleIndex = loadUnitRecursive(resolved.value());
+                bindings.push_back(makeModuleBinding(baseSegments.back(), moduleIndex));
                 continue;
             }
             if (isExternalRoot(baseSegments)) {
@@ -429,7 +577,7 @@ std::vector<ImportedBinding> ProjectLoader::resolveImports(const LoadedUnit& uni
                         "Module '" + imp.modulePath + "' does not share item '" + item + "'.",
                         imp.span);
                 }
-                bindings.push_back(ImportedBinding{item, it->second});
+                bindings.push_back(it->second);
             }
             continue;
         }
@@ -449,15 +597,15 @@ std::vector<ImportedBinding> ProjectLoader::resolveImports(const LoadedUnit& uni
                 if (!std::filesystem::exists(childFile)) {
                     throwDiagnostic(importerPath, "module", "Missing module file for '" + imp.modulePath + "." + item + "'.", imp.span);
                 }
-                loadUnitRecursive(childFile);
-                bindings.push_back(ImportedBinding{item, SymbolKind::Module});
+                const size_t moduleIndex = loadUnitRecursive(childFile);
+                bindings.push_back(makeModuleBinding(item, moduleIndex));
             }
             continue;
         }
 
         if (isExternalRoot(baseSegments)) {
             for (const auto& item : imp.specificItems) {
-                bindings.push_back(ImportedBinding{item, std::isupper(static_cast<unsigned char>(item.front())) != 0 ? SymbolKind::Shape : SymbolKind::Module});
+                bindings.push_back(ImportedBinding{item, std::isupper(static_cast<unsigned char>(item.front())) != 0 ? SymbolKind::Shape : SymbolKind::Function});
             }
             continue;
         }
@@ -468,19 +616,16 @@ std::vector<ImportedBinding> ProjectLoader::resolveImports(const LoadedUnit& uni
     return bindings;
 }
 
-std::filesystem::path ProjectLoader::resolveEntryPath(const ModuleManifest& manifest) {
-    if (!manifest.entryRealm.has_value()) {
-        throwDiagnostic(manifest.path, "manifest", "Missing 'pub entry' declaration.");
+std::filesystem::path ProjectLoader::resolveWorkspaceEntryPath(const std::filesystem::path& workspaceRoot) const {
+    const auto candidate = normalizePath(workspaceRoot / "main.cat");
+    if (!std::filesystem::exists(candidate) || !std::filesystem::is_regular_file(candidate)) {
+        throwDiagnostic(
+            workspaceRoot,
+            "workspace",
+            "Workspace root must contain main.cat as the entry source file.");
     }
-
-    const auto segments = splitRealmPath(*manifest.entryRealm);
-    const auto resolved = tryResolveRealmFile(segments);
-    if (!resolved.has_value()) {
-        throwDiagnostic(manifest.path, "manifest", "Unable to resolve entry realm '" + *manifest.entryRealm + "'.");
-    }
-    return resolved.value();
+    return candidate;
 }
-
 LoadedProject ProjectLoader::load(const std::filesystem::path& inputPath) {
     project = LoadedProject{};
     unitIndexByPath.clear();
@@ -490,18 +635,67 @@ LoadedProject ProjectLoader::load(const std::filesystem::path& inputPath) {
 
     project.inputPath = normalizePath(inputPath);
 
-    if (project.inputPath.filename() == "modules.cat") {
-        const auto manifest = loadManifest(project.inputPath);
-        project.packageRoot = project.inputPath.parent_path();
-        project.manifestPath = manifest.path;
-        project.entryRealm = manifest.entryRealm;
+    auto loadWorkspaceConfigIfPresent = [&]() {
+        if (project.configPath.has_value()) {
+            project.config = loadProjectConfig(*project.configPath);
+        } else {
+            project.config.reset();
+        }
+    };
+
+    if (std::filesystem::is_directory(project.inputPath)) {
+        project.packageRoot = project.inputPath;
+        project.configPath = detectWorkspaceConfig(project.packageRoot);
         project.structuredPackage = true;
-        project.entryIndex = loadUnitRecursive(resolveEntryPath(manifest));
+        loadWorkspaceConfigIfPresent();
+        project.entryIndex = loadUnitRecursive(resolveWorkspaceEntryPath(project.packageRoot));
         return std::move(project);
     }
 
-    project.packageRoot = findPackageRoot(project.inputPath.parent_path());
-    project.structuredPackage = std::filesystem::exists(project.packageRoot / "modules.cat");
+    if (isSupportedConfigFile(project.inputPath)) {
+        project.packageRoot = normalizePath(project.inputPath.parent_path());
+        project.configPath = project.inputPath;
+        project.structuredPackage = true;
+        loadWorkspaceConfigIfPresent();
+        project.entryIndex = loadUnitRecursive(resolveWorkspaceEntryPath(project.packageRoot));
+        return std::move(project);
+    }
+
+    if (project.inputPath.filename() == "modules.cat") {
+        const auto workspaceRoot = findWorkspaceRoot(project.inputPath.parent_path());
+        if (!workspaceRoot.has_value()) {
+            throwDiagnostic(
+                project.inputPath,
+                "workspace",
+                "modules.cat is a folder module index. Build the workspace root that contains main.cat.");
+        }
+        project.packageRoot = *workspaceRoot;
+        project.configPath = detectWorkspaceConfig(project.packageRoot);
+        project.structuredPackage = true;
+        loadWorkspaceConfigIfPresent();
+        project.entryIndex = loadUnitRecursive(resolveWorkspaceEntryPath(project.packageRoot));
+        return std::move(project);
+    }
+
+    if (project.inputPath.filename() == "main.cat") {
+        project.packageRoot = normalizePath(project.inputPath.parent_path());
+        project.configPath = detectWorkspaceConfig(project.packageRoot);
+        project.structuredPackage = true;
+        loadWorkspaceConfigIfPresent();
+        project.entryIndex = loadUnitRecursive(project.inputPath);
+        return std::move(project);
+    }
+
+    if (const auto workspaceRoot = findWorkspaceRoot(project.inputPath.parent_path())) {
+        project.packageRoot = *workspaceRoot;
+        project.configPath = detectWorkspaceConfig(project.packageRoot);
+        project.structuredPackage = true;
+        loadWorkspaceConfigIfPresent();
+        project.entryIndex = loadUnitRecursive(project.inputPath);
+        return std::move(project);
+    }
+
+    project.packageRoot = normalizePath(project.inputPath.parent_path());
     project.entryIndex = loadUnitRecursive(project.inputPath);
     return std::move(project);
 }

@@ -3,6 +3,7 @@
 #include "analysis/types.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -15,6 +16,8 @@ struct Symbol {
     bool isMutable = false;
     bool isExternal = false;
     ResolvedType type;
+    std::optional<size_t> viewSourceParamIndex;
+    std::shared_ptr<ModuleInfo> moduleInfo;
 };
 
 class Scope {
