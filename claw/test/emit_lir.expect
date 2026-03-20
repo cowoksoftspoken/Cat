@@ -1,0 +1,27 @@
+lir.program entry test.air
+lir.realm test.air
+lir.shape Config
+  field host: Text
+  field payload: T
+lir.choice Maybe
+  case none
+  case some(T)
+lir.fn classify(cfg: look Config of Int32, item: Maybe of Int32) -> Int32
+  block entry:
+    %t0 = field cfg.host : look Text [proven-safe]
+    call.runtime print(%t0) : Unit hook runtime.print [proven-safe]
+    %t1 = field cfg.payload : Int32 [proven-safe]
+    call.runtime print(%t1) : Unit hook runtime.print [proven-safe]
+    switch item : Maybe of Int32
+    case none -> pick_none_0
+    case some(value) -> pick_some_1
+    default -> entry.defect.pick.0
+  block pick_none_0 [preds: entry]:
+    call.runtime println("empty") : Unit hook runtime.println [proven-safe]
+    drop item : Maybe of Int32
+    return 0 : Int32
+  block pick_some_1 [preds: entry]:
+    drop item : Maybe of Int32
+    return value : Int32
+  block entry.defect.pick.0 [preds: entry]:
+    defect unreachable_choice "switch reached no matching case"

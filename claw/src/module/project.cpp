@@ -628,6 +628,7 @@ std::filesystem::path ProjectLoader::resolveWorkspaceEntryPath(const std::filesy
 }
 LoadedProject ProjectLoader::load(const std::filesystem::path& inputPath) {
     project = LoadedProject{};
+    project.target = defaultTargetSpec();
     unitIndexByPath.clear();
     manifestCache.clear();
     exportCache.clear();

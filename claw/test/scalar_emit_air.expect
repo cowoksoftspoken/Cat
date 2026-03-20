@@ -1,0 +1,9 @@
+air.realm test.scalar_emit
+air.fn take_u16(value: UInt16) -> UInt16
+  give value : UInt16
+air.fn demo(base: UInt64, count: USize) -> UInt16
+  hold small: UInt16 = 1 : UInt16
+  slot total: UInt64 = (base + 1) : UInt64
+  when (count == 0) : Bool
+    give take_u16(small : UInt16) : UInt16
+  give 0 : UInt16

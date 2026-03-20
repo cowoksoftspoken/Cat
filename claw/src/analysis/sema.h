@@ -23,7 +23,7 @@ struct TypeNode;
 
 class SemanticAnalyzer {
 public:
-    explicit SemanticAnalyzer(std::vector<ImportedBinding> importedBindings = {});
+    explicit SemanticAnalyzer(std::vector<ImportedBinding> importedBindings = {}, TargetSpec target = defaultTargetSpec());
 
     void analyze(RealmDecl* realm);
 
@@ -31,6 +31,7 @@ public:
     const FunctionSignature* lookupFunctionSignature(const FnDecl* fn) const;
     const FunctionSignature* lookupFunctionSignature(const std::string& name) const;
     const FunctionSignature* lookupCallableSignature(const Expr* callee) const;
+    std::optional<MethodSignature> lookupMethodSignature(const Expr* callee) const;
     const ResolvedType* lookupExprType(const Expr* expr) const;
     const ShapeInfo* lookupShape(const std::string& name) const;
     const ChoiceInfo* lookupChoice(const std::string& name) const;
@@ -41,6 +42,7 @@ private:
     AnalysisResult analysisResult;
     std::vector<Diagnostic> diagnostics;
     std::vector<ImportedBinding> importedBindings;
+    TargetSpec target;
     const FnDecl* currentFunction = nullptr;
     const FunctionSignature* currentSignature = nullptr;
     std::optional<size_t> currentViewReturnSourceParam;
@@ -63,7 +65,7 @@ private:
 
     void analyzeBlock(BlockStmt* block);
     void analyzeStmt(Stmt* stmt);
-    ResolvedType analyzeExpr(Expr* expr);
+    ResolvedType analyzeExpr(Expr* expr, const ResolvedType* expectedType = nullptr);
     ResolvedType resolveTypeNode(const TypeNode* node, const std::unordered_set<std::string>& localTypeParams);
     std::unordered_map<std::string, ResolvedType> buildTypeBindingsChecked(
         const std::vector<std::string>& paramNames,
@@ -74,6 +76,7 @@ private:
         const std::vector<std::string>& paramNames,
         const std::vector<ResolvedType>& argTypes,
         const std::string& context);
+    std::optional<MethodSignature> lookupMethodSignature(const ResolvedType& receiverType, const std::string& methodName) const;
     std::optional<size_t> resolveViewSourceParam(const Expr* expr) const;
     bool canBorrowAsView(const ResolvedType& from, const ResolvedType& to) const;
     bool canPassArgumentType(Expr* expr, const ResolvedType& from, const ResolvedType& to) const;

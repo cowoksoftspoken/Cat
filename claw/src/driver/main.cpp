@@ -13,6 +13,7 @@
 #include "diagnostics/diagnostics.h"
 #include "ir/air.h"
 #include "ir/oir.h"
+#include "ir/lir.h"
 #include "lexer/lexer.h"
 #include "module/project.h"
 #include "parser/parser.h"
@@ -233,6 +234,7 @@ void printUsage() {
               << "  check      Parse and validate semantics + ownership\n"
               << "  emit-air   Emit analyzed IR view after semantic analysis\n"
               << "  emit-oir   Emit lowered OIR view closer to backend\n"
+              << "  emit-lir   Emit backend-facing lowering IR derived from OIR\n"
               << "  build      Validate a workspace entry graph rooted at main.cat\n";
 }
 
@@ -247,7 +249,7 @@ int main(int argc, char** argv) {
     const std::string command = argv[1];
     const std::string filepath = argv[2];
 
-    if (command != "check" && command != "build" && command != "emit-air" && command != "emit-oir") {
+    if (command != "check" && command != "build" && command != "emit-air" && command != "emit-oir" && command != "emit-lir") {
         std::cerr << "Unknown command: " << command << "\n";
         printUsage();
         return 1;
@@ -273,7 +275,7 @@ int main(int argc, char** argv) {
         analyzers.reserve(project.units.size());
 
         for (const auto& unit : project.units) {
-            auto sema = std::make_unique<claw::frontend::SemanticAnalyzer>(unit.importedBindings);
+            auto sema = std::make_unique<claw::frontend::SemanticAnalyzer>(unit.importedBindings, project.target);
             try {
                 sema->analyze(unit.ast.get());
             } catch (const claw::frontend::DiagnosticError& error) {
@@ -290,26 +292,44 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        std::vector<std::unique_ptr<claw::frontend::OwnershipChecker>> ownershipCheckers;
+        ownershipCheckers.reserve(project.units.size());
         for (size_t i = 0; i < project.units.size(); ++i) {
-            claw::frontend::OwnershipChecker ownership;
+            auto ownership = std::make_unique<claw::frontend::OwnershipChecker>();
             try {
-                ownership.check(project.units[i].ast.get(), *analyzers[i]);
+                ownership->check(project.units[i].ast.get(), *analyzers[i]);
             } catch (const claw::frontend::DiagnosticError& error) {
                 throw claw::frontend::DiagnosticError(error.what(), attachPath(error.diagnostics(), project.units[i].path));
             }
+            ownershipCheckers.push_back(std::move(ownership));
         }
 
-        if (command == "emit-oir") {
-            if (project.structuredPackage && project.units[project.entryIndex].path.filename() == "main.cat" && project.units[project.entryIndex].path.parent_path().lexically_normal() == project.packageRoot.lexically_normal()) {
-                std::vector<claw::frontend::OirUnitView> units;
-                units.reserve(project.units.size());
-                for (size_t i = 0; i < project.units.size(); ++i) {
-                    units.push_back(claw::frontend::OirUnitView{project.units[i].ast.get(), analyzers[i].get()});
+        if (command == "emit-oir" || command == "emit-lir") {
+            std::vector<claw::frontend::OirUnitView> units;
+            units.reserve(project.units.size());
+            for (size_t i = 0; i < project.units.size(); ++i) {
+                units.push_back(claw::frontend::OirUnitView{project.units[i].ast.get(), analyzers[i].get(), &ownershipCheckers[i]->result()});
+            }
+
+            const bool emitWholeProject = project.structuredPackage &&
+                project.units[project.entryIndex].path.filename() == "main.cat" &&
+                project.units[project.entryIndex].path.parent_path().lexically_normal() == project.packageRoot.lexically_normal();
+
+            if (command == "emit-oir") {
+                if (emitWholeProject) {
+                    std::cout << claw::frontend::emitOirProgram(project.units[project.entryIndex].ast->name, units);
+                } else {
+                    claw::frontend::OirEmitter oir(*analyzers[project.entryIndex], &ownershipCheckers[project.entryIndex]->result());
+                    std::cout << oir.emit(project.units[project.entryIndex].ast.get());
                 }
-                std::cout << claw::frontend::emitOirProgram(project.units[project.entryIndex].ast->name, units);
             } else {
-                claw::frontend::OirEmitter oir(*analyzers[project.entryIndex]);
-                std::cout << oir.emit(project.units[project.entryIndex].ast.get());
+                if (emitWholeProject) {
+                    std::cout << claw::frontend::emitLirProgram(project.units[project.entryIndex].ast->name, units);
+                } else {
+                    claw::frontend::OirEmitter oir(*analyzers[project.entryIndex], &ownershipCheckers[project.entryIndex]->result());
+                    const claw::frontend::OirProgram program{project.units[project.entryIndex].ast->name, {oir.lowerRealm(project.units[project.entryIndex].ast.get())}};
+                    std::cout << claw::frontend::emitLirProgram(program);
+                }
             }
             return 0;
         }

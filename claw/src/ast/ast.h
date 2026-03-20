@@ -30,6 +30,10 @@ struct IntExpr : public Expr {
     std::string value;
 };
 
+struct FloatExpr : public Expr {
+    std::string value;
+};
+
 struct StringExpr : public Expr {
     std::string value;
 };

@@ -1,0 +1,15 @@
+realm test.drop_schedule
+
+fn schedule_drop(flag: Int32) -> Int32 {
+    slot message: Text = "hello"
+    when flag == 0 {
+        hold inner: Text = "warmup"
+        println(inner)
+    }
+    message = "again"
+    loop flag > 0 {
+        hold loop_note: Text = "loop"
+        stop
+    }
+    give flag
+}

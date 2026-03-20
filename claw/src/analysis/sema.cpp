@@ -2,7 +2,11 @@
 
 #include "ast/ast.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cctype>
+#include <cstddef>
+#include <limits>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -24,17 +28,222 @@ ResolvedType makeOwnedType(const std::string& name) {
     return type;
 }
 
+ResolvedType makeIntegerLiteralType() {
+    ResolvedType type;
+    type.name = "IntLiteral";
+    type.category = TypeCategory::Plain;
+    return type;
+}
+
+ResolvedType makeFloatLiteralType() {
+    ResolvedType type;
+    type.name = "FloatLiteral";
+    type.category = TypeCategory::Plain;
+    return type;
+}
+
+bool isFloatLiteralType(const ResolvedType& type) {
+    return type.category == TypeCategory::Plain && type.viewKind.empty() && type.name == "FloatLiteral";
+}
+
+bool isNumericLiteralType(const ResolvedType& type) {
+    return isIntegerLiteralType(type) || isFloatLiteralType(type);
+}
+
+bool isConcreteNumericType(const ResolvedType& type) {
+    return type.isPlain() && type.viewKind.empty() && isNumericTypeName(type.name);
+}
+
+bool isFloatTypeName(const std::string& name) {
+    return name == "Float32" || name == "Float64";
+}
+
+bool literalMagnitudeHasNonZeroDigit(const std::string& magnitude) {
+    for (char c : magnitude) {
+        if (std::isdigit(static_cast<unsigned char>(c)) && c != '0') {
+            return true;
+        }
+    }
+    return false;
+}
+
+struct NumericLiteralParts {
+    std::string magnitude;
+    std::string suffix;
+};
+
+NumericLiteralParts splitNumericLiteralText(const std::string& text) {
+    const size_t suffixPos = text.find('_');
+    if (suffixPos == std::string::npos) {
+        return {text, {}};
+    }
+    return {text.substr(0, suffixPos), text.substr(suffixPos + 1)};
+}
+
+std::optional<ResolvedType> resolveNumericLiteralSuffixType(const std::string& suffix) {
+    if (suffix.empty() || !isNumericTypeName(suffix)) {
+        return std::nullopt;
+    }
+    return makePlainType(suffix);
+}
+
+using UInt128 = unsigned __int128;
+
+bool tryParseUnsignedDecimal(const std::string& text, UInt128* value) {
+    if (!value || text.empty()) {
+        return false;
+    }
+
+    UInt128 parsed = 0;
+    for (char c : text) {
+        if (!std::isdigit(static_cast<unsigned char>(c))) {
+            return false;
+        }
+        const unsigned digit = static_cast<unsigned>(c - '0');
+        const UInt128 maxValue = std::numeric_limits<UInt128>::max();
+        if (parsed > (maxValue - digit) / 10) {
+            return false;
+        }
+        parsed = parsed * 10 + digit;
+    }
+
+    *value = parsed;
+    return true;
+}
+
+UInt128 maxUnsignedBits(unsigned bits) {
+    if (bits >= 128) {
+        return std::numeric_limits<UInt128>::max();
+    }
+    return (UInt128{1} << bits) - 1;
+}
+
+UInt128 maxSignedPositiveBits(unsigned bits) {
+    if (bits <= 1) {
+        return 0;
+    }
+    return maxUnsignedBits(bits - 1);
+}
+
+std::optional<unsigned> integerLikeBitWidth(const std::string& typeName) {
+    static const std::unordered_map<std::string, unsigned> widths = {
+        {"Byte", 8}, {"Int8", 8}, {"Int16", 16}, {"Int32", 32}, {"Int64", 64}, {"Int128", 128},
+        {"UInt8", 8}, {"UInt16", 16}, {"UInt32", 32}, {"UInt64", 64}, {"UInt128", 128},
+        {"Bits8", 8}, {"Bits16", 16}, {"Bits32", 32}, {"Bits64", 64}, {"Bits128", 128}};
+    const auto it = widths.find(typeName);
+    return it != widths.end() ? std::optional<unsigned>(it->second) : std::nullopt;
+}
+
+bool integerLiteralFitsTarget(const std::string& magnitude, const std::string& targetName, const TargetSpec& target) {
+    UInt128 value = 0;
+    if (!tryParseUnsignedDecimal(magnitude, &value)) {
+        return false;
+    }
+
+    const unsigned pointerWidthBits = std::min(target.pointerWidthBits == 0 ? 64u : target.pointerWidthBits, 128u);
+    const unsigned ptrdiffWidthBits = std::min(target.ptrdiffWidthBits == 0 ? 64u : target.ptrdiffWidthBits, 128u);
+
+    if (targetName == "Rune") {
+        return value <= UInt128{0x10FFFF};
+    }
+    if (targetName == "USize") {
+        return value <= maxUnsignedBits(pointerWidthBits);
+    }
+    if (targetName == "ISize") {
+        return value <= maxSignedPositiveBits(ptrdiffWidthBits);
+    }
+
+    if (const auto bits = integerLikeBitWidth(targetName)) {
+        if (targetName.rfind("Int", 0) == 0) {
+            return value <= maxSignedPositiveBits(*bits);
+        }
+        return value <= maxUnsignedBits(*bits);
+    }
+
+    if (targetName == "Float32") {
+        return value <= UInt128{1} << 24;
+    }
+    if (targetName == "Float64") {
+        return value <= UInt128{1} << 53;
+    }
+
+    return false;
+}
+
+bool floatLiteralFitsTarget(const std::string& magnitude, const std::string& targetName) {
+    if (!isFloatTypeName(targetName)) {
+        return false;
+    }
+
+    try {
+        const long double value = std::stold(magnitude);
+        if (!std::isfinite(value)) {
+            return false;
+        }
+        const bool nonZeroMagnitude = literalMagnitudeHasNonZeroDigit(magnitude);
+        if (targetName == "Float32") {
+            const float narrowed = static_cast<float>(value);
+            return std::isfinite(narrowed) && !(narrowed == 0.0f && nonZeroMagnitude);
+        }
+        const double narrowed = static_cast<double>(value);
+        return std::isfinite(narrowed) && !(narrowed == 0.0 && nonZeroMagnitude);
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 bool startsWithUppercase(const std::string& name) {
     return !name.empty() && std::isupper(static_cast<unsigned char>(name.front())) != 0;
 }
 
-bool isNumericTypeName(const std::string& name) {
-    static const std::unordered_set<std::string> numericTypes = {
-        "Byte", "Rune", "Int8", "Int16", "Int32", "Int64", "Int128",
-        "UInt8", "UInt16", "UInt32", "UInt64", "UInt128",
-        "Bits8", "Bits16", "Bits32", "Bits64", "Bits128",
-        "Float32", "Float64", "USize", "ISize"};
-    return numericTypes.find(name) != numericTypes.end();
+bool shouldUseExpectedIntegerType(const ResolvedType* expectedType) {
+    return expectedType && expectedType->isPlain() && expectedType->viewKind.empty() &&
+           isIntegerLikeTypeName(expectedType->name);
+}
+
+bool shouldUseExpectedFloatType(const ResolvedType* expectedType) {
+    return expectedType && expectedType->isPlain() && expectedType->viewKind.empty() &&
+           isFloatTypeName(expectedType->name);
+}
+
+ResolvedType defaultIntegerLiteralType() {
+    return makePlainType("Int32");
+}
+
+ResolvedType defaultFloatLiteralType() {
+    return makePlainType("Float64");
+}
+
+ResolvedType normalizeInferredLiteralType(const ResolvedType& type) {
+    if (isIntegerLiteralType(type)) {
+        return defaultIntegerLiteralType();
+    }
+    if (isFloatLiteralType(type)) {
+        return defaultFloatLiteralType();
+    }
+    return type;
+}
+
+std::optional<ResolvedType> numericLiteralContextType(
+    const ResolvedType* expectedType,
+    const ResolvedType& leftType,
+    const ResolvedType& rightType) {
+    if (expectedType && isConcreteNumericType(*expectedType)) {
+        return *expectedType;
+    }
+    if (isConcreteNumericType(leftType)) {
+        return leftType;
+    }
+    if (isConcreteNumericType(rightType)) {
+        return rightType;
+    }
+    if (isFloatLiteralType(leftType) || isFloatLiteralType(rightType)) {
+        return defaultFloatLiteralType();
+    }
+    if (isIntegerLiteralType(leftType) && isIntegerLiteralType(rightType)) {
+        return defaultIntegerLiteralType();
+    }
+    return std::nullopt;
 }
 
 bool isRawAddressTypeName(const std::string& name) {
@@ -53,10 +262,134 @@ std::string describeCalleeExpr(const Expr* expr) {
     return "<callee>";
 }
 
+struct BuiltinMethodSpec {
+    std::string receiverName;
+    std::string methodName;
+    std::string receiverViewKind;
+    std::vector<ResolvedType> paramTypes;
+    ResolvedType returnType;
+    std::optional<size_t> viewReturnSourceArg;
+    bool viewReturnFromReceiver = false;
+};
+
+ResolvedType asViewType(const ResolvedType& base, const std::string& viewKind) {
+    ResolvedType adapted = base;
+    adapted.viewKind = viewKind;
+    adapted.category = viewKind.empty() ? base.category : TypeCategory::View;
+    return adapted;
+}
+
+const std::vector<BuiltinMethodSpec>& builtinMethodSpecs() {
+    static const std::vector<BuiltinMethodSpec> specs = [] {
+        std::vector<BuiltinMethodSpec> entries;
+        auto addSizedLookMethods = [&](const std::string& receiverName) {
+            entries.push_back(BuiltinMethodSpec{receiverName, "len", "look", {}, makePlainType("USize")});
+            entries.push_back(BuiltinMethodSpec{receiverName, "is_empty", "look", {}, makePlainType("Bool")});
+        };
+        auto addByteIndexMethod = [&](const std::string& receiverName) {
+            entries.push_back(BuiltinMethodSpec{
+                receiverName,
+                "byte_at",
+                "look",
+                {makePlainType("USize")},
+                makePlainType("Byte")});
+        };
+        auto addByteEdgeMethods = [&](const std::string& receiverName) {
+            entries.push_back(BuiltinMethodSpec{receiverName, "first_byte", "look", {}, makePlainType("Byte")});
+            entries.push_back(BuiltinMethodSpec{receiverName, "last_byte", "look", {}, makePlainType("Byte")});
+            entries.push_back(BuiltinMethodSpec{receiverName, "find_byte", "look", {makePlainType("Byte")}, makePlainType("ISize")});
+            entries.push_back(BuiltinMethodSpec{receiverName, "count_byte", "look", {makePlainType("Byte")}, makePlainType("USize")});
+        };
+        auto addTextSearchMethods = [&](const std::string& receiverName) {
+            entries.push_back(BuiltinMethodSpec{receiverName, "starts_with", "look", {asViewType(makeOwnedType(receiverName), "look")}, makePlainType("Bool")});
+            entries.push_back(BuiltinMethodSpec{receiverName, "ends_with", "look", {asViewType(makeOwnedType(receiverName), "look")}, makePlainType("Bool")});
+        };
+        auto addCapacityLookMethod = [&](const std::string& receiverName) {
+            entries.push_back(BuiltinMethodSpec{receiverName, "capacity", "look", {}, makePlainType("USize")});
+            entries.push_back(BuiltinMethodSpec{receiverName, "has_capacity", "look", {makePlainType("USize")}, makePlainType("Bool")});
+        };
+        auto addClearEditMethod = [&](const std::string& receiverName) {
+            entries.push_back(BuiltinMethodSpec{receiverName, "clear", "edit", {}, makePlainType("Unit")});
+        };
+        auto addReserveEditMethod = [&](const std::string& receiverName) {
+            entries.push_back(BuiltinMethodSpec{receiverName, "reserve", "edit", {makePlainType("USize")}, makePlainType("Unit")});
+        };
+        auto addTruncateEditMethod = [&](const std::string& receiverName) {
+            entries.push_back(BuiltinMethodSpec{receiverName, "truncate", "edit", {makePlainType("USize")}, makePlainType("Unit")});
+        };
+        auto addShrinkToFitEditMethod = [&](const std::string& receiverName) {
+            entries.push_back(BuiltinMethodSpec{receiverName, "shrink_to_fit", "edit", {}, makePlainType("Unit")});
+        };
+        auto addSliceViewMethod = [&](const std::string& receiverName) {
+            entries.push_back(BuiltinMethodSpec{
+                receiverName,
+                "slice",
+                "look",
+                {makePlainType("USize"), makePlainType("USize")},
+                asViewType(makeOwnedType(receiverName), "look"),
+                std::nullopt,
+                true});
+        };
+
+        addSizedLookMethods("Text");
+        addSizedLookMethods("Bytes");
+        addSizedLookMethods("Span");
+        addSizedLookMethods("Vec");
+        addSizedLookMethods("Table");
+        addSizedLookMethods("Set");
+        addSizedLookMethods("Ring");
+
+        addByteIndexMethod("Text");
+        addByteIndexMethod("Bytes");
+        addByteEdgeMethods("Text");
+        addByteEdgeMethods("Bytes");
+        addTextSearchMethods("Text");
+        addTextSearchMethods("Bytes");
+
+        entries.push_back(BuiltinMethodSpec{"Text", "contains", "look", {asViewType(makeOwnedType("Text"), "look")}, makePlainType("Bool")});
+        entries.push_back(BuiltinMethodSpec{"Bytes", "contains", "look", {asViewType(makeOwnedType("Bytes"), "look")}, makePlainType("Bool")});
+        entries.push_back(BuiltinMethodSpec{"Text", "contains_byte", "look", {makePlainType("Byte")}, makePlainType("Bool")});
+        entries.push_back(BuiltinMethodSpec{"Bytes", "contains_byte", "look", {makePlainType("Byte")}, makePlainType("Bool")});
+
+        addSliceViewMethod("Text");
+        addSliceViewMethod("Bytes");
+
+        addCapacityLookMethod("Bytes");
+        addCapacityLookMethod("Vec");
+        addCapacityLookMethod("Table");
+        addCapacityLookMethod("Set");
+        addCapacityLookMethod("Ring");
+
+        addClearEditMethod("Bytes");
+        addClearEditMethod("Vec");
+        addClearEditMethod("Table");
+        addClearEditMethod("Set");
+        addClearEditMethod("Ring");
+
+        addReserveEditMethod("Bytes");
+        addReserveEditMethod("Vec");
+        addReserveEditMethod("Table");
+        addReserveEditMethod("Set");
+        addReserveEditMethod("Ring");
+
+        addTruncateEditMethod("Bytes");
+        addTruncateEditMethod("Vec");
+        addTruncateEditMethod("Ring");
+
+        addShrinkToFitEditMethod("Bytes");
+        addShrinkToFitEditMethod("Vec");
+        addShrinkToFitEditMethod("Table");
+        addShrinkToFitEditMethod("Set");
+        addShrinkToFitEditMethod("Ring");
+        return entries;
+    }();
+    return specs;
+}
+
 } // namespace
 
-SemanticAnalyzer::SemanticAnalyzer(std::vector<ImportedBinding> importedBindings)
-    : importedBindings(std::move(importedBindings)) {}
+SemanticAnalyzer::SemanticAnalyzer(std::vector<ImportedBinding> importedBindings, TargetSpec target)
+    : importedBindings(std::move(importedBindings)), target(std::move(target)) {}
 
 const AnalysisResult& SemanticAnalyzer::result() const {
     return analysisResult;
@@ -102,6 +435,27 @@ const FunctionSignature* SemanticAnalyzer::lookupCallableSignature(const Expr* c
 const ShapeInfo* SemanticAnalyzer::lookupShape(const std::string& name) const {
     const auto it = analysisResult.shapesByName.find(name);
     return it != analysisResult.shapesByName.end() ? &it->second : nullptr;
+}
+
+std::optional<MethodSignature> SemanticAnalyzer::lookupMethodSignature(const Expr* callee) const {
+    auto* member = dynamic_cast<const MemberExpr*>(callee);
+    if (!member) {
+        return std::nullopt;
+    }
+
+    if (auto* objectIdent = dynamic_cast<const IdentExpr*>(member->object.get())) {
+        const auto sym = lookupSymbol(objectIdent->name);
+        if (sym && sym->kind == SymbolKind::Module) {
+            return std::nullopt;
+        }
+    }
+
+    const auto* receiverType = lookupExprType(member->object.get());
+    if (!receiverType) {
+        return std::nullopt;
+    }
+
+    return lookupMethodSignature(*receiverType, member->member);
 }
 
 const ChoiceInfo* SemanticAnalyzer::lookupChoice(const std::string& name) const {
@@ -372,6 +726,33 @@ ResolvedType SemanticAnalyzer::instantiateGenericType(
     return substituteType(type, bindings);
 }
 
+std::optional<MethodSignature> SemanticAnalyzer::lookupMethodSignature(
+    const ResolvedType& receiverType,
+    const std::string& methodName) const {
+    if (receiverType.isUnknown()) {
+        return std::nullopt;
+    }
+
+    for (const auto& spec : builtinMethodSpecs()) {
+        if (spec.receiverName != receiverType.name || spec.methodName != methodName) {
+            continue;
+        }
+
+        MethodSignature signature;
+        signature.name = spec.methodName;
+        signature.receiverType = asViewType(receiverType, spec.receiverViewKind);
+        signature.function.paramTypes = spec.paramTypes;
+        signature.function.returnType = spec.returnType;
+        signature.function.isExternal = true;
+        signature.viewReturnSourceArg = spec.viewReturnSourceArg;
+        signature.viewReturnFromReceiver = spec.viewReturnFromReceiver;
+        signature.isBuiltin = true;
+        return signature;
+    }
+
+    return std::nullopt;
+}
+
 void SemanticAnalyzer::analyzeDecl(Decl* decl) {
     if (auto* fn = dynamic_cast<FnDecl*>(decl)) {
         analyzeFnDecl(fn);
@@ -496,12 +877,19 @@ void SemanticAnalyzer::analyzeBlock(BlockStmt* block) {
 
 void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
     if (auto* bind = dynamic_cast<BindingStmt*>(stmt)) {
-        const ResolvedType valueType = bind->value ? analyzeExpr(bind->value.get()) : makeUnknownType();
-        ResolvedType finalType = bind->type ? resolveTypeNode(bind->type.get(), {}) : valueType;
+        const ResolvedType declaredType = bind->type ? resolveTypeNode(bind->type.get(), {}) : makeUnknownType();
+        const ResolvedType valueType = bind->value
+            ? analyzeExpr(bind->value.get(), bind->type ? &declaredType : nullptr)
+            : makeUnknownType();
+        ResolvedType finalType = bind->type ? declaredType : normalizeInferredLiteralType(valueType);
 
         if (!bind->type && !bind->value) {
             reportError(bind, "Binding requires a type or an initializer: " + bind->name);
             finalType = makeUnknownType();
+        }
+
+        if (!bind->isMutable && !bind->value) {
+            reportError(bind, "Immutable binding requires an initializer: " + bind->name);
         }
 
         const bool bindingTypeMatches = finalType.isView()
@@ -512,6 +900,10 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                 bind,
                 "Initializer type mismatch for '" + bind->name + "': expected " +
                     finalType.describe() + ", got " + valueType.describe());
+        }
+
+        if (!bind->type && bind->value && isIntegerLiteralType(valueType)) {
+            analysisResult.exprTypes[bind->value.get()] = finalType;
         }
 
         if (rawDepth == 0 && isRawAddressType(finalType)) {
@@ -534,8 +926,8 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
     }
 
     if (auto* assign = dynamic_cast<AssignStmt*>(stmt)) {
-        const ResolvedType valueType = assign->value ? analyzeExpr(assign->value.get()) : makeUnknownType();
         const ResolvedType targetType = assign->target ? analyzeExpr(assign->target.get()) : makeUnknownType();
+        const ResolvedType valueType = assign->value ? analyzeExpr(assign->value.get(), &targetType) : makeUnknownType();
 
         if (rawDepth == 0 && (isRawAddressType(valueType) || isRawAddressType(targetType))) {
             reportError(assign, "Raw address values may only appear inside raw blocks.");
@@ -598,7 +990,9 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
     }
 
     if (auto* give = dynamic_cast<GiveStmt*>(stmt)) {
-        const ResolvedType valueType = give->value ? analyzeExpr(give->value.get()) : makePlainType("Unit");
+        const ResolvedType valueType = give->value
+            ? analyzeExpr(give->value.get(), currentSignature ? &currentSignature->returnType : nullptr)
+            : makePlainType("Unit");
         if (currentSignature && currentSignature->returnType.isView()) {
             if (!canBorrowAsView(valueType, currentSignature->returnType)) {
                 reportError(
@@ -797,13 +1191,57 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
     }
 }
 
-ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr) {
+ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr, const ResolvedType* expectedType) {
     ResolvedType type = makeUnknownType();
 
     if (dynamic_cast<BoolExpr*>(expr)) {
         type = makePlainType("Bool");
-    } else if (dynamic_cast<IntExpr*>(expr)) {
-        type = makePlainType("Int32");
+    } else if (auto* intExpr = dynamic_cast<IntExpr*>(expr)) {
+        const auto literal = splitNumericLiteralText(intExpr->value);
+        if (!literal.suffix.empty()) {
+            const auto suffixType = resolveNumericLiteralSuffixType(literal.suffix);
+            if (!suffixType.has_value()) {
+                reportError(intExpr, "Unknown numeric literal suffix: " + literal.suffix);
+            } else {
+                type = *suffixType;
+                if (!integerLiteralFitsTarget(literal.magnitude, type.name, target)) {
+                    reportError(intExpr, "Integer literal '" + literal.magnitude + "' does not fit target type " + type.name + ".");
+                }
+            }
+        } else if (shouldUseExpectedIntegerType(expectedType) || shouldUseExpectedFloatType(expectedType)) {
+            type = *expectedType;
+            if (!integerLiteralFitsTarget(literal.magnitude, type.name, target)) {
+                const std::string detail = shouldUseExpectedFloatType(expectedType)
+                    ? "does not fit exactly in target type "
+                    : "does not fit target type ";
+                reportError(intExpr, "Integer literal '" + literal.magnitude + "' " + detail + type.name + ".");
+            }
+        } else {
+            type = makeIntegerLiteralType();
+        }
+    } else if (auto* floatExpr = dynamic_cast<FloatExpr*>(expr)) {
+        const auto literal = splitNumericLiteralText(floatExpr->value);
+        if (!literal.suffix.empty()) {
+            const auto suffixType = resolveNumericLiteralSuffixType(literal.suffix);
+            if (!suffixType.has_value()) {
+                reportError(floatExpr, "Unknown numeric literal suffix: " + literal.suffix);
+            } else if (!isFloatTypeName(suffixType->name)) {
+                reportError(floatExpr, "Float literal suffix must be Float32 or Float64, got " + literal.suffix + ".");
+                type = *suffixType;
+            } else {
+                type = *suffixType;
+                if (!floatLiteralFitsTarget(literal.magnitude, type.name)) {
+                    reportError(floatExpr, "Float literal '" + literal.magnitude + "' does not fit target type " + type.name + ".");
+                }
+            }
+        } else if (shouldUseExpectedFloatType(expectedType)) {
+            type = *expectedType;
+            if (!floatLiteralFitsTarget(literal.magnitude, type.name)) {
+                reportError(floatExpr, "Float literal '" + literal.magnitude + "' does not fit target type " + type.name + ".");
+            }
+        } else {
+            type = makeFloatLiteralType();
+        }
     } else if (dynamic_cast<StringExpr*>(expr)) {
         type = makeOwnedType("Text");
     } else if (auto* ident = dynamic_cast<IdentExpr*>(expr)) {
@@ -816,11 +1254,23 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr) {
             type = makeUnknownType(ident->name);
         }
     } else if (auto* binary = dynamic_cast<BinaryExpr*>(expr)) {
-        const ResolvedType leftType = analyzeExpr(binary->left.get());
-        const ResolvedType rightType = analyzeExpr(binary->right.get());
+        const bool isComparison = binary->op == "==" || binary->op == "!=" || binary->op == "<" || binary->op == "<=" ||
+            binary->op == ">" || binary->op == ">=";
+        const ResolvedType* operandExpected = (expectedType && isConcreteNumericType(*expectedType)) ? expectedType : nullptr;
+        ResolvedType leftType = analyzeExpr(binary->left.get(), operandExpected);
+        ResolvedType rightType = analyzeExpr(binary->right.get(), operandExpected);
 
-        if (binary->op == "==" || binary->op == "!=" || binary->op == "<" || binary->op == "<=" ||
-            binary->op == ">" || binary->op == ">=") {
+        const auto preferredType = numericLiteralContextType(operandExpected, leftType, rightType);
+        if (preferredType.has_value()) {
+            if (isNumericLiteralType(leftType)) {
+                leftType = analyzeExpr(binary->left.get(), &*preferredType);
+            }
+            if (isNumericLiteralType(rightType)) {
+                rightType = analyzeExpr(binary->right.get(), &*preferredType);
+            }
+        }
+
+        if (isComparison) {
             if (!leftType.isUnknown() && !rightType.isUnknown() &&
                 !canAssignType(rightType, leftType) && !canAssignType(leftType, rightType)) {
                 reportError(binary, "Incompatible comparison operands: " + leftType.describe() + " and " + rightType.describe());
@@ -836,7 +1286,9 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr) {
         }
     } else if (auto* call = dynamic_cast<CallExpr*>(expr)) {
         const FunctionSignature* signature = nullptr;
+        std::optional<MethodSignature> methodSignature;
         bool externalCall = false;
+        bool skipCalleeAnalysis = false;
 
         if (auto* calleeIdent = dynamic_cast<IdentExpr*>(call->callee.get())) {
             signature = lookupFunctionSignature(calleeIdent->name);
@@ -862,9 +1314,28 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr) {
                     }
                 }
             }
+
+            if (!signature && !externalCall) {
+                const ResolvedType receiverType = analyzeExpr(member->object.get());
+                methodSignature = lookupMethodSignature(receiverType, member->member);
+                if (methodSignature.has_value()) {
+                    signature = &methodSignature->function;
+                    if (!canPassArgumentType(member->object.get(), receiverType, methodSignature->receiverType)) {
+                        reportError(
+                            member->object.get(),
+                            "Method receiver type mismatch: expected " + methodSignature->receiverType.describe() +
+                                ", got " + receiverType.describe());
+                    }
+                } else if (!receiverType.isUnknown() && !lookupShape(receiverType.name)) {
+                    reportError(call, "Type '" + receiverType.name + "' does not provide method '" + member->member + "'.");
+                    skipCalleeAnalysis = true;
+                }
+            }
         }
 
-        analyzeExpr(call->callee.get());
+        if (!methodSignature.has_value() && !skipCalleeAnalysis) {
+            analyzeExpr(call->callee.get());
+        }
 
         if (signature) {
             if (call->args.size() != signature->paramTypes.size()) {
@@ -881,18 +1352,18 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr) {
             }
 
             for (size_t i = 0; i < call->args.size(); ++i) {
-                const ResolvedType argType = analyzeExpr(call->args[i].get());
+                const ResolvedType* paramType = i < signature->paramTypes.size() ? &signature->paramTypes[i] : nullptr;
+                const ResolvedType argType = analyzeExpr(call->args[i].get(), paramType);
                 if (rawDepth == 0 &&
-                    ((i < signature->paramTypes.size() && isRawAddressType(signature->paramTypes[i])) ||
-                     isRawAddressType(argType))) {
+                    ((paramType && isRawAddressType(*paramType)) || isRawAddressType(argType))) {
                     reportError(
                         call->args[i].get(),
                         "Raw address values may only cross call boundaries inside raw blocks.");
                 }
-                if (i < signature->paramTypes.size() && !canPassArgumentType(call->args[i].get(), argType, signature->paramTypes[i])) {
+                if (paramType && !canPassArgumentType(call->args[i].get(), argType, *paramType)) {
                     reportError(
                         call->args[i].get(),
-                        "Call argument type mismatch: expected " + signature->paramTypes[i].describe() +
+                        "Call argument type mismatch: expected " + paramType->describe() +
                             ", got " + argType.describe());
                 }
             }
@@ -939,20 +1410,24 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr) {
         }
 
         if (!objectType.isUnknown()) {
-            const ShapeInfo* shape = lookupShape(objectType.name);
-            if (!shape) {
-                reportError(member, "Type '" + objectType.name + "' does not expose fields.");
+            if (lookupMethodSignature(objectType, member->member).has_value()) {
+                type = makeUnknownType(member->member);
             } else {
-                const auto fieldIt = shape->fields.find(member->member);
-                if (fieldIt == shape->fields.end()) {
-                    reportError(member, "Unknown field '" + member->member + "' on type '" + objectType.name + "'.");
+                const ShapeInfo* shape = lookupShape(objectType.name);
+                if (!shape) {
+                    reportError(member, "Type '" + objectType.name + "' does not expose fields.");
                 } else {
-                    const ResolvedType fieldType = instantiateGenericType(
-                        fieldIt->second,
-                        shape->typeParams,
-                        objectType.params,
-                        "shape '" + objectType.name + "'");
-                    type = adaptMemberType(objectType, fieldType);
+                    const auto fieldIt = shape->fields.find(member->member);
+                    if (fieldIt == shape->fields.end()) {
+                        reportError(member, "Unknown field '" + member->member + "' on type '" + objectType.name + "'.");
+                    } else {
+                        const ResolvedType fieldType = instantiateGenericType(
+                            fieldIt->second,
+                            shape->typeParams,
+                            objectType.params,
+                            "shape '" + objectType.name + "'");
+                        type = adaptMemberType(objectType, fieldType);
+                    }
                 }
             }
         }
@@ -985,6 +1460,7 @@ std::optional<size_t> SemanticAnalyzer::resolveViewSourceParam(const Expr* expr)
 
     if (auto* call = dynamic_cast<const CallExpr*>(expr)) {
         const FunctionSignature* signature = nullptr;
+        std::optional<MethodSignature> methodSignature;
 
         if (auto* calleeIdent = dynamic_cast<const IdentExpr*>(call->callee.get())) {
             signature = lookupFunctionSignature(calleeIdent->name);
@@ -997,6 +1473,21 @@ std::optional<size_t> SemanticAnalyzer::resolveViewSourceParam(const Expr* expr)
                         exported->second.kind == SymbolKind::Function &&
                         exported->second.functionSignature.has_value()) {
                         signature = &*exported->second.functionSignature;
+                    }
+                }
+            }
+
+            if (!signature) {
+                methodSignature = lookupMethodSignature(call->callee.get());
+                if (methodSignature.has_value()) {
+                    if (methodSignature->viewReturnFromReceiver) {
+                        return resolveViewSourceParam(member->object.get());
+                    }
+                    if (methodSignature->viewReturnSourceArg.has_value()) {
+                        const size_t sourceIndex = *methodSignature->viewReturnSourceArg;
+                        if (sourceIndex < call->args.size()) {
+                            return resolveViewSourceParam(call->args[sourceIndex].get());
+                        }
                     }
                 }
             }

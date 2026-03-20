@@ -1,0 +1,5 @@
+realm test.definite_init_semantic
+
+fn immutable_missing_initializer() {
+    hold value: Int32
+}

@@ -599,6 +599,12 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         expr->value = previous().text;
         return expr;
     }
+    if (match(TokenKind::FloatLiteral)) {
+        auto expr = std::make_unique<FloatExpr>();
+        expr->span = spanFromToken(previous());
+        expr->value = previous().text;
+        return expr;
+    }
     if (match(TokenKind::Identifier)) {
         auto expr = std::make_unique<IdentExpr>();
         expr->span = spanFromToken(previous());

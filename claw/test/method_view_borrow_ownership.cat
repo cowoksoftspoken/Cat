@@ -1,0 +1,10 @@
+realm test.method_view_borrow_ownership
+
+fn consume_text(text: Text) {
+}
+
+fn blocked_move() {
+    slot message: Text = "hello"
+    hold prefix: look Text = message.slice(0, 2)
+    consume_text(message)
+}

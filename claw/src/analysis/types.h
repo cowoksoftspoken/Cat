@@ -70,6 +70,21 @@ struct FunctionSignature {
     bool isExternal = false;
 };
 
+struct MethodSignature {
+    std::string name;
+    ResolvedType receiverType;
+    FunctionSignature function;
+    std::optional<size_t> viewReturnSourceArg;
+    bool viewReturnFromReceiver = false;
+    bool isBuiltin = false;
+};
+
+struct TargetSpec {
+    std::string name = "native64";
+    unsigned pointerWidthBits = 64;
+    unsigned ptrdiffWidthBits = 64;
+};
+
 struct ImportedBinding {
     std::string name;
     SymbolKind kind = SymbolKind::Module;
@@ -126,6 +141,10 @@ ResolvedType substituteType(
     const ResolvedType& type,
     const std::unordered_map<std::string, ResolvedType>& bindings);
 bool sameType(const ResolvedType& left, const ResolvedType& right);
+bool isNumericTypeName(const std::string& name);
+bool isIntegerLikeTypeName(const std::string& name);
+bool isIntegerLiteralType(const ResolvedType& type);
 bool canAssignType(const ResolvedType& from, const ResolvedType& to);
+TargetSpec defaultTargetSpec();
 
 } // namespace claw::frontend

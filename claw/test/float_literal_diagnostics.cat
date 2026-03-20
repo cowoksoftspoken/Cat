@@ -1,0 +1,25 @@
+realm test.float_literal_diagnostics
+
+fn bad_suffix() -> Float32 {
+    give 1.0_Float16
+}
+
+fn bad_float_suffix_kind() -> UInt32 {
+    give 1.5_UInt32
+}
+
+fn bad_byte_range() {
+    hold tiny: Byte = 300
+}
+
+fn bad_exact_float_fit() -> Float32 {
+    give 16777217
+}
+
+fn bad_underflow() -> Float32 {
+    give 1e-50_Float32
+}
+
+fn bad_integer_target() {
+    hold count: Int32 = 1.5
+}

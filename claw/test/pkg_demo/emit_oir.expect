@@ -3,15 +3,18 @@ oir.realm main
 oir.fn inspect(cfg: Config) -> Int32
   block entry:
     %t0 = field cfg.port : Int32
+    drop cfg : Config
     return %t0 : Int32
 oir.fn unwrap(signal: Signal) -> Int32
   block entry:
     pick signal : Signal
-    case ready -> pick_ready_1
-    case failed(code) -> pick_failed_2
-  block pick_ready_1:
+    case ready -> pick_ready_0
+    case failed(code) -> pick_failed_1
+  block pick_ready_0:
+    drop signal : Signal
     return 0 : Int32
-  block pick_failed_2:
+  block pick_failed_1:
+    drop signal : Signal
     return code : Int32
 oir.fn main() -> Int32
   block entry:

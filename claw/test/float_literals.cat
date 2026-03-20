@@ -1,0 +1,37 @@
+realm test.float_literals
+
+fn default_float() -> Float64 {
+    slot value = 1.5
+    give value + 2.5
+}
+
+fn float_context() -> Float32 {
+    hold scale: Float32 = 1
+    hold ratio: Float32 = 1.25
+    give scale + ratio
+}
+
+fn explicit_suffix() -> Float32 {
+    hold value = 1.5_Float32
+    give value + 2.0_Float32
+}
+
+fn exponent_float() -> Float64 {
+    give 1e3 + 2.5e-1
+}
+
+fn exponent_suffix() -> Float32 {
+    give 1e2_Float32 + 2.5e-1_Float32
+}
+
+fn integer_suffix() -> UInt16 {
+    give 42_UInt16
+}
+
+fn mixed_literal_arith() -> Float64 {
+    give 1 + 2.5
+}
+
+fn int_to_float_context(value: Float32) -> Float32 {
+    give value + 1
+}

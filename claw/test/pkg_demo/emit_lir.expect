@@ -1,0 +1,50 @@
+lir.program entry main
+lir.realm main
+lir.fn inspect(cfg: Config) -> Int32
+  block entry:
+    %t0 = field cfg.port : Int32 [proven-safe]
+    drop cfg : Config
+    return %t0 : Int32
+lir.fn unwrap(signal: Signal) -> Int32
+  block entry:
+    switch signal : Signal
+    case ready -> pick_ready_0
+    case failed(code) -> pick_failed_1
+    default -> entry.defect.pick.0
+  block pick_ready_0 [preds: entry]:
+    drop signal : Signal
+    return 0 : Int32
+  block pick_failed_1 [preds: entry]:
+    drop signal : Signal
+    return code : Int32
+  block entry.defect.pick.0 [preds: entry]:
+    defect unreachable_choice "switch reached no matching case"
+lir.fn main() -> Int32
+  block entry:
+    %t0 = call.foreign emit("boot") : <unknown> hook foreign.emit
+    discard %t0 : <unknown>
+    call.runtime runtime.banner() : Unit hook runtime.banner [proven-safe]
+    %t1 = call.module util.answer() : Int32
+    %t2 = call.direct add(%t1, 1) : Int32
+    return %t2 : Int32
+
+lir.realm src.util
+lir.fn answer() -> Int32
+  block entry:
+    return 7 : Int32
+
+lir.realm src.runtime
+lir.fn banner() -> Unit
+  block entry:
+    call.runtime println("boot") : Unit hook runtime.println [proven-safe]
+
+lir.realm src.api
+lir.shape Config
+  field port: Int32
+lir.choice Signal
+  case ready
+  case failed(Int32)
+lir.fn add(base: Int32, extra: Int32) -> Int32
+  block entry:
+    %t0 = add base, extra : Int32
+    return %t0 : Int32

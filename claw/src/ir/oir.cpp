@@ -1,35 +1,24 @@
 #include "ir/oir.h"
 
+#include "analysis/ownership.h"
 #include "analysis/sema.h"
 #include "ast/ast.h"
 
 #include <sstream>
+#include <string>
 #include <utility>
-#include <vector>
+#include <variant>
 
 namespace claw::frontend {
 
 namespace {
 
-struct LoweredValue {
-    std::string text;
-    std::string type;
-    bool isUnit = false;
+template <typename... Ts>
+struct Overloaded : Ts... {
+    using Ts::operator()...;
 };
-
-struct FunctionBuilder {
-    std::ostringstream out;
-    int nextTemp = 0;
-    int nextBlock = 0;
-
-    std::string tempName() {
-        return "%t" + std::to_string(nextTemp++);
-    }
-
-    std::string blockName(const std::string& prefix) {
-        return prefix + "_" + std::to_string(nextBlock++);
-    }
-};
+template <typename... Ts>
+Overloaded(Ts...) -> Overloaded<Ts...>;
 
 std::string indentText(int indent) {
     return std::string(static_cast<size_t>(indent) * 2, ' ');
@@ -58,6 +47,22 @@ std::string exprType(const SemanticAnalyzer& sema, const Expr* expr) {
     return type ? type->describe() : std::string("<unknown>");
 }
 
+const std::vector<DropAction>* dropsBeforeStmt(const OwnershipResult* ownership, const Stmt* stmt) {
+    if (!ownership || !stmt) {
+        return nullptr;
+    }
+    const auto it = ownership->dropsBeforeStmt.find(stmt);
+    return it != ownership->dropsBeforeStmt.end() ? &it->second : nullptr;
+}
+
+const std::vector<DropAction>* dropsAtBlockEnd(const OwnershipResult* ownership, const BlockStmt* block) {
+    if (!ownership || !block) {
+        return nullptr;
+    }
+    const auto it = ownership->dropsAtBlockEnd.find(block);
+    return it != ownership->dropsAtBlockEnd.end() ? &it->second : nullptr;
+}
+
 std::string calleeText(const Expr* expr) {
     if (!expr) {
         return "<callee>";
@@ -71,395 +76,541 @@ std::string calleeText(const Expr* expr) {
     return "<callee>";
 }
 
-LoweredValue lowerExpr(const SemanticAnalyzer& sema, const Expr* expr, FunctionBuilder& builder, int indent);
-void emitBlock(
+struct LoopTargets {
+    std::string continueLabel;
+    std::string breakLabel;
+};
+
+struct FunctionLoweringContext {
+    const SemanticAnalyzer& sema;
+    const OwnershipResult* ownership = nullptr;
+    OirFunction function;
+    int nextTemp = 0;
+    int nextBlock = 0;
+    std::vector<LoopTargets> loopStack;
+
+    std::string tempName() {
+        return "%t" + std::to_string(nextTemp++);
+    }
+
+    std::string blockName(const std::string& prefix) {
+        return prefix + "_" + std::to_string(nextBlock++);
+    }
+
+    size_t addBlock(const std::string& label) {
+        function.blocks.push_back(OirBlock{label, {}});
+        return function.blocks.size() - 1;
+    }
+
+    const LoopTargets* currentLoop() const {
+        return loopStack.empty() ? nullptr : &loopStack.back();
+    }
+};
+
+void appendInst(FunctionLoweringContext& context, size_t blockIndex, OirInst inst) {
+    context.function.blocks[blockIndex].insts.push_back(std::move(inst));
+}
+
+void appendDropInsts(
+    FunctionLoweringContext& context,
+    size_t blockIndex,
+    const std::vector<DropAction>* drops) {
+    if (!drops) {
+        return;
+    }
+    for (const auto& drop : *drops) {
+        appendInst(context, blockIndex, OirDropInst{drop.name, drop.type.describe()});
+    }
+}
+
+OirValue lowerExpr(
     const SemanticAnalyzer& sema,
-    const BlockStmt* block,
-    const std::string& label,
-    FunctionBuilder& builder,
-    int indent,
-    const std::string& fallthroughLabel,
+    const Expr* expr,
+    FunctionLoweringContext& context,
+    size_t blockIndex);
+
+std::optional<size_t> lowerStmt(
+    const SemanticAnalyzer& sema,
+    const OwnershipResult* ownership,
+    const Stmt* stmt,
+    FunctionLoweringContext& context,
+    size_t currentBlockIndex,
     const OirEmitter& emitter);
 
-LoweredValue lowerExpr(const SemanticAnalyzer& sema, const Expr* expr, FunctionBuilder& builder, int indent) {
+size_t lowerBlock(
+    const SemanticAnalyzer& sema,
+    const OwnershipResult* ownership,
+    const BlockStmt* block,
+    const std::string& label,
+    FunctionLoweringContext& context,
+    const std::string& fallthroughLabel,
+    const OirEmitter& emitter) {
+    const size_t entryBlockIndex = context.addBlock(label);
+    std::optional<size_t> currentBlockIndex = entryBlockIndex;
+
+    if (!block) {
+        if (!fallthroughLabel.empty()) {
+            appendInst(context, entryBlockIndex, OirGotoInst{fallthroughLabel});
+        }
+        return entryBlockIndex;
+    }
+
+    for (const auto& stmt : block->statements) {
+        if (!currentBlockIndex.has_value()) {
+            return entryBlockIndex;
+        }
+        currentBlockIndex = lowerStmt(
+            sema,
+            ownership,
+            stmt.get(),
+            context,
+            *currentBlockIndex,
+            emitter);
+    }
+
+    if (currentBlockIndex.has_value()) {
+        appendDropInsts(context, *currentBlockIndex, dropsAtBlockEnd(ownership, block));
+        if (!fallthroughLabel.empty()) {
+            appendInst(context, *currentBlockIndex, OirGotoInst{fallthroughLabel});
+        }
+    }
+
+    return entryBlockIndex;
+}
+
+OirValue lowerExpr(
+    const SemanticAnalyzer& sema,
+    const Expr* expr,
+    FunctionLoweringContext& context,
+    size_t blockIndex) {
     if (!expr) {
-        return {"unit", "Unit", true};
+        return OirValue{"unit", "Unit", true};
     }
 
     if (auto* value = dynamic_cast<const IntExpr*>(expr)) {
-        return {value->value, exprType(sema, expr), false};
+        return OirValue{value->value, exprType(sema, expr), false};
+    }
+    if (auto* value = dynamic_cast<const FloatExpr*>(expr)) {
+        return OirValue{value->value, exprType(sema, expr), false};
     }
     if (auto* value = dynamic_cast<const StringExpr*>(expr)) {
-        return {quoted(value->value), exprType(sema, expr), false};
+        return OirValue{quoted(value->value), exprType(sema, expr), false};
     }
     if (auto* value = dynamic_cast<const BoolExpr*>(expr)) {
-        return {value->value ? "true" : "false", exprType(sema, expr), false};
+        return OirValue{value->value ? "true" : "false", exprType(sema, expr), false};
     }
     if (auto* ident = dynamic_cast<const IdentExpr*>(expr)) {
-        return {ident->name, exprType(sema, expr), false};
+        return OirValue{ident->name, exprType(sema, expr), false};
     }
     if (auto* member = dynamic_cast<const MemberExpr*>(expr)) {
-        const auto object = lowerExpr(sema, member->object.get(), builder, indent);
-        const std::string temp = builder.tempName();
+        const OirValue object = lowerExpr(sema, member->object.get(), context, blockIndex);
+        const std::string result = context.tempName();
         const std::string type = exprType(sema, expr);
-        builder.out << indentText(indent) << temp << " = field " << object.text << "." << member->member
-                    << " : " << type << "\n";
-        return {temp, type, false};
+        appendInst(context, blockIndex, OirFieldInst{result, object, member->member, type});
+        return OirValue{result, type, false};
     }
     if (auto* binary = dynamic_cast<const BinaryExpr*>(expr)) {
-        const auto left = lowerExpr(sema, binary->left.get(), builder, indent);
-        const auto right = lowerExpr(sema, binary->right.get(), builder, indent);
-        const std::string temp = builder.tempName();
+        const OirValue left = lowerExpr(sema, binary->left.get(), context, blockIndex);
+        const OirValue right = lowerExpr(sema, binary->right.get(), context, blockIndex);
+        const std::string result = context.tempName();
         const std::string type = exprType(sema, expr);
-        builder.out << indentText(indent) << temp << " = " << binaryOpName(binary->op) << " "
-                    << left.text << ", " << right.text << " : " << type << "\n";
-        return {temp, type, false};
+        appendInst(context, blockIndex, OirBinaryInst{result, binaryOpName(binary->op), left, right, type});
+        return OirValue{result, type, false};
     }
     if (auto* call = dynamic_cast<const CallExpr*>(expr)) {
-        std::vector<LoweredValue> args;
+        std::vector<OirValue> args;
         args.reserve(call->args.size());
         for (const auto& arg : call->args) {
-            args.push_back(lowerExpr(sema, arg.get(), builder, indent));
+            args.push_back(lowerExpr(sema, arg.get(), context, blockIndex));
         }
 
         const std::string type = exprType(sema, expr);
-        const std::string target = calleeText(call->callee.get());
+        const std::string callee = calleeText(call->callee.get());
         if (type == "Unit") {
-            builder.out << indentText(indent) << "call " << target << "(";
-            for (size_t i = 0; i < args.size(); ++i) {
-                if (i > 0) {
-                    builder.out << ", ";
-                }
-                builder.out << args[i].text;
-            }
-            builder.out << ") : Unit\n";
-            return {"unit", "Unit", true};
+            appendInst(context, blockIndex, OirCallInst{std::nullopt, callee, std::move(args), type});
+            return OirValue{"unit", "Unit", true};
         }
 
-        const std::string temp = builder.tempName();
-        builder.out << indentText(indent) << temp << " = call " << target << "(";
-        for (size_t i = 0; i < args.size(); ++i) {
-            if (i > 0) {
-                builder.out << ", ";
-            }
-            builder.out << args[i].text;
-        }
-        builder.out << ") : " << type << "\n";
-        return {temp, type, false};
+        const std::string result = context.tempName();
+        appendInst(context, blockIndex, OirCallInst{result, callee, std::move(args), type});
+        return OirValue{result, type, false};
     }
 
-    return {"<expr>", exprType(sema, expr), false};
+    return OirValue{"<expr>", exprType(sema, expr), false};
 }
 
-void emitStmt(
+std::optional<size_t> lowerStmt(
     const SemanticAnalyzer& sema,
+    const OwnershipResult* ownership,
     const Stmt* stmt,
-    FunctionBuilder& builder,
-    int indent,
+    FunctionLoweringContext& context,
+    size_t currentBlockIndex,
     const OirEmitter& emitter) {
-    const std::string pad = indentText(indent);
-
     if (auto* bind = dynamic_cast<const BindingStmt*>(stmt)) {
         const auto bindingIt = sema.result().bindingTypes.find(bind);
         const std::string type = bindingIt != sema.result().bindingTypes.end()
             ? bindingIt->second.describe()
             : std::string("<unknown>");
-        builder.out << pad << (bind->isMutable ? "slot " : "hold ") << bind->name << ": " << type;
+        std::optional<OirValue> init;
         if (bind->value) {
-            const auto value = lowerExpr(sema, bind->value.get(), builder, indent);
-            builder.out << " = " << value.text;
+            init = lowerExpr(sema, bind->value.get(), context, currentBlockIndex);
         }
-        builder.out << "\n";
-        return;
+        appendInst(context, currentBlockIndex, OirHoldInst{bind->isMutable, bind->name, type, init});
+        return currentBlockIndex;
     }
 
     if (auto* assign = dynamic_cast<const AssignStmt*>(stmt)) {
-        const auto value = lowerExpr(sema, assign->value.get(), builder, indent);
+        const OirValue value = lowerExpr(sema, assign->value.get(), context, currentBlockIndex);
+        appendDropInsts(context, currentBlockIndex, dropsBeforeStmt(ownership, stmt));
         if (auto* ident = dynamic_cast<const IdentExpr*>(assign->target.get())) {
-            builder.out << pad << "store " << ident->name << " <- " << value.text
-                        << " : " << value.type << "\n";
-            return;
+            appendInst(context, currentBlockIndex, OirStoreInst{ident->name, value});
+            return currentBlockIndex;
         }
         if (auto* member = dynamic_cast<const MemberExpr*>(assign->target.get())) {
-            const auto object = lowerExpr(sema, member->object.get(), builder, indent);
-            builder.out << pad << "store_field " << object.text << "." << member->member << " <- "
-                        << value.text << " : " << value.type << "\n";
-            return;
+            const OirValue object = lowerExpr(sema, member->object.get(), context, currentBlockIndex);
+            appendInst(context, currentBlockIndex, OirStoreFieldInst{object, member->member, value});
+            return currentBlockIndex;
         }
-        builder.out << pad << "store <unsupported> <- " << value.text << "\n";
-        return;
+        appendInst(context, currentBlockIndex, OirStoreInst{"<unsupported>", value});
+        return currentBlockIndex;
     }
 
     if (auto* give = dynamic_cast<const GiveStmt*>(stmt)) {
-        if (!give->value) {
-            builder.out << pad << "return unit : Unit\n";
-            return;
-        }
-        const auto value = lowerExpr(sema, give->value.get(), builder, indent);
-        builder.out << pad << "return " << value.text << " : " << value.type << "\n";
-        return;
+        const OirValue value = give->value
+            ? lowerExpr(sema, give->value.get(), context, currentBlockIndex)
+            : OirValue{"unit", "Unit", true};
+        appendDropInsts(context, currentBlockIndex, dropsBeforeStmt(ownership, stmt));
+        appendInst(context, currentBlockIndex, OirReturnInst{value});
+        return std::nullopt;
     }
 
     if (auto* exprStmt = dynamic_cast<const ExprStmt*>(stmt)) {
-        const auto value = lowerExpr(sema, exprStmt->expr.get(), builder, indent);
+        const OirValue value = lowerExpr(sema, exprStmt->expr.get(), context, currentBlockIndex);
         if (!value.isUnit) {
-            builder.out << pad << "discard " << value.text << " : " << value.type << "\n";
+            appendInst(context, currentBlockIndex, OirDiscardInst{value});
         }
-        return;
+        return currentBlockIndex;
     }
 
     if (auto* when = dynamic_cast<const WhenStmt*>(stmt)) {
-        const auto condition = lowerExpr(sema, when->condition.get(), builder, indent);
-        const std::string thenLabel = builder.blockName("when_then");
-        const std::string joinLabel = builder.blockName("when_join");
+        const OirValue condition = lowerExpr(sema, when->condition.get(), context, currentBlockIndex);
+        const std::string thenLabel = context.blockName("when_then");
         if (when->elseBlock) {
-            const std::string elseLabel = builder.blockName("when_else");
-            builder.out << pad << "branch " << condition.text << " -> " << thenLabel << ", " << elseLabel << "\n";
-            emitBlock(sema, when->thenBlock.get(), thenLabel, builder, indent - 1, joinLabel, emitter);
-            emitBlock(sema, when->elseBlock.get(), elseLabel, builder, indent - 1, joinLabel, emitter);
-            if (!emitter.blockDefinitelyTerminates(when->thenBlock.get()) ||
-                !emitter.blockDefinitelyTerminates(when->elseBlock.get())) {
-                builder.out << indentText(indent - 1) << "block " << joinLabel << ":\n";
+            const std::string elseLabel = context.blockName("when_else");
+            const bool thenTerminates = emitter.blockDefinitelyTerminates(when->thenBlock.get());
+            const bool elseTerminates = emitter.blockDefinitelyTerminates(when->elseBlock.get());
+            const bool needsJoin = !thenTerminates || !elseTerminates;
+            const std::string joinLabel = needsJoin ? context.blockName("when_join") : std::string{};
+            appendInst(context, currentBlockIndex, OirBranchInst{condition, thenLabel, elseLabel});
+            lowerBlock(sema, ownership, when->thenBlock.get(), thenLabel, context, needsJoin ? joinLabel : std::string{}, emitter);
+            lowerBlock(sema, ownership, when->elseBlock.get(), elseLabel, context, needsJoin ? joinLabel : std::string{}, emitter);
+            if (!needsJoin) {
+                return std::nullopt;
             }
-        } else {
-            builder.out << pad << "branch " << condition.text << " -> " << thenLabel << ", " << joinLabel << "\n";
-            emitBlock(sema, when->thenBlock.get(), thenLabel, builder, indent - 1, joinLabel, emitter);
-            builder.out << indentText(indent - 1) << "block " << joinLabel << ":\n";
+            return context.addBlock(joinLabel);
         }
-        return;
+
+        const std::string joinLabel = context.blockName("when_join");
+        appendInst(context, currentBlockIndex, OirBranchInst{condition, thenLabel, joinLabel});
+        lowerBlock(sema, ownership, when->thenBlock.get(), thenLabel, context, joinLabel, emitter);
+        return context.addBlock(joinLabel);
     }
 
     if (auto* loop = dynamic_cast<const LoopStmt*>(stmt)) {
-        const std::string headerLabel = builder.blockName("loop_header");
-        const std::string bodyLabel = builder.blockName("loop_body");
-        const std::string exitLabel = builder.blockName("loop_exit");
-        builder.out << pad << "goto " << headerLabel << "\n";
-        builder.out << indentText(indent - 1) << "block " << headerLabel << ":\n";
+        const std::string headerLabel = context.blockName("loop_header");
+        const std::string bodyLabel = context.blockName("loop_body");
+        const std::string exitLabel = context.blockName("loop_exit");
+        appendInst(context, currentBlockIndex, OirGotoInst{headerLabel});
+        const size_t headerIndex = context.addBlock(headerLabel);
         if (loop->condition) {
-            const auto condition = lowerExpr(sema, loop->condition.get(), builder, indent);
-            builder.out << pad << "branch " << condition.text << " -> " << bodyLabel << ", " << exitLabel << "\n";
+            const OirValue condition = lowerExpr(sema, loop->condition.get(), context, headerIndex);
+            appendInst(context, headerIndex, OirBranchInst{condition, bodyLabel, exitLabel});
         } else {
-            builder.out << pad << "goto " << bodyLabel << "\n";
+            appendInst(context, headerIndex, OirGotoInst{bodyLabel});
         }
-        emitBlock(sema, loop->body.get(), bodyLabel, builder, indent - 1, headerLabel, emitter);
-        builder.out << indentText(indent - 1) << "block " << exitLabel << ":\n";
-        return;
+        context.loopStack.push_back(LoopTargets{headerLabel, exitLabel});
+        lowerBlock(sema, ownership, loop->body.get(), bodyLabel, context, headerLabel, emitter);
+        context.loopStack.pop_back();
+        return context.addBlock(exitLabel);
     }
 
     if (auto* scan = dynamic_cast<const ScanStmt*>(stmt)) {
-        const auto iterable = lowerExpr(sema, scan->iterable.get(), builder, indent);
-        const auto itemIt = sema.result().scanItemTypes.find(scan);
-        const std::string itemType = itemIt != sema.result().scanItemTypes.end()
-            ? itemIt->second.describe()
+        const OirValue iterable = lowerExpr(sema, scan->iterable.get(), context, currentBlockIndex);
+        const auto itemTypeIt = sema.result().scanItemTypes.find(scan);
+        const std::string itemType = itemTypeIt != sema.result().scanItemTypes.end()
+            ? itemTypeIt->second.describe()
             : std::string("<unknown>");
-        const std::string bodyLabel = builder.blockName("scan_body");
-        const std::string exitLabel = builder.blockName("scan_exit");
-        builder.out << pad << "scan " << scan->itemName << ": " << itemType << " over " << iterable.text
-                    << " -> " << bodyLabel << ", " << exitLabel << "\n";
-        emitBlock(sema, scan->body.get(), bodyLabel, builder, indent - 1, exitLabel, emitter);
-        builder.out << indentText(indent - 1) << "block " << exitLabel << ":\n";
-        return;
+        const std::string bodyLabel = context.blockName("scan_body");
+        const std::string exitLabel = context.blockName("scan_exit");
+        appendInst(context, currentBlockIndex, OirScanInst{scan->itemName, itemType, iterable, bodyLabel, exitLabel});
+        lowerBlock(sema, ownership, scan->body.get(), bodyLabel, context, exitLabel, emitter);
+        return context.addBlock(exitLabel);
     }
 
     if (auto* pick = dynamic_cast<const PickStmt*>(stmt)) {
-        const auto value = lowerExpr(sema, pick->value.get(), builder, indent);
-        const std::string joinLabel = builder.blockName("pick_join");
-        bool needsJoin = false;
-        builder.out << pad << "pick " << value.text << " : " << value.type << "\n";
-        std::vector<std::pair<const PickBranch*, std::string>> branchLabels;
-        for (const auto& branch : pick->branches) {
-            branchLabels.push_back({&branch, builder.blockName("pick_" + branch.tag)});
-            builder.out << pad << "case " << branch.tag;
-            if (!branch.bindings.empty()) {
-                builder.out << "(";
-                for (size_t i = 0; i < branch.bindings.size(); ++i) {
-                    if (i > 0) {
-                        builder.out << ", ";
-                    }
-                    builder.out << branch.bindings[i];
+        const OirValue value = lowerExpr(sema, pick->value.get(), context, currentBlockIndex);
+        const bool needsJoin = [&]() {
+            for (const auto& branch : pick->branches) {
+                if (!emitter.blockDefinitelyTerminates(branch.body.get())) {
+                    return true;
                 }
-                builder.out << ")";
             }
-            builder.out << " -> " << branchLabels.back().second << "\n";
-            needsJoin = needsJoin || !emitter.blockDefinitelyTerminates(branch.body.get());
+            return false;
+        }();
+        const std::string joinLabel = needsJoin ? context.blockName("pick_join") : std::string{};
+        std::vector<OirPickCase> cases;
+        cases.reserve(pick->branches.size());
+        for (const auto& branch : pick->branches) {
+            cases.push_back(OirPickCase{branch.tag, branch.bindings, context.blockName("pick_" + branch.tag)});
         }
-        for (const auto& [branch, label] : branchLabels) {
-            emitBlock(sema, branch->body.get(), label, builder, indent - 1, needsJoin ? joinLabel : std::string{}, emitter);
+        appendInst(context, currentBlockIndex, OirPickInst{value, cases});
+        for (size_t i = 0; i < pick->branches.size(); ++i) {
+            lowerBlock(
+                sema,
+                ownership,
+                pick->branches[i].body.get(),
+                cases[i].targetLabel,
+                context,
+                needsJoin ? joinLabel : std::string{},
+                emitter);
         }
-        if (needsJoin) {
-            builder.out << indentText(indent - 1) << "block " << joinLabel << ":\n";
+        if (!needsJoin) {
+            return std::nullopt;
         }
-        return;
+        return context.addBlock(joinLabel);
     }
 
     if (auto* lift = dynamic_cast<const LiftStmt*>(stmt)) {
-        const auto value = lowerExpr(sema, lift->expr.get(), builder, indent);
-        const std::string failLabel = builder.blockName("lift_fail");
-        builder.out << pad << "lift " << value.text << " -> " << lift->valueName << ", fail " << failLabel << "\n";
-        emitBlock(sema, lift->failBlock.get(), failLabel, builder, indent - 1, {}, emitter);
-        return;
+        const OirValue value = lowerExpr(sema, lift->expr.get(), context, currentBlockIndex);
+        const std::string failLabel = context.blockName("lift_fail");
+        appendInst(context, currentBlockIndex, OirLiftInst{value, lift->valueName, failLabel});
+        lowerBlock(sema, ownership, lift->failBlock.get(), failLabel, context, {}, emitter);
+        return currentBlockIndex;
     }
 
     if (auto* raw = dynamic_cast<const RawStmt*>(stmt)) {
-        const std::string rawLabel = builder.blockName("raw");
-        builder.out << pad << "goto " << rawLabel << "\n";
-        emitBlock(sema, raw->body.get(), rawLabel, builder, indent - 1, {}, emitter);
-        return;
+        const std::string rawLabel = context.blockName("raw");
+        const std::string contLabel = context.blockName("raw_cont");
+        appendInst(context, currentBlockIndex, OirGotoInst{rawLabel});
+        lowerBlock(sema, ownership, raw->body.get(), rawLabel, context, contLabel, emitter);
+        return context.addBlock(contLabel);
     }
 
     if (dynamic_cast<const StopStmt*>(stmt)) {
-        builder.out << pad << "stop\n";
-        return;
+        appendDropInsts(context, currentBlockIndex, dropsBeforeStmt(ownership, stmt));
+        const auto* loop = context.currentLoop();
+        appendInst(context, currentBlockIndex, OirStopInst{loop ? loop->breakLabel : std::string{}});
+        return std::nullopt;
     }
 
     if (dynamic_cast<const SkipStmt*>(stmt)) {
-        builder.out << pad << "skip\n";
-        return;
+        appendDropInsts(context, currentBlockIndex, dropsBeforeStmt(ownership, stmt));
+        const auto* loop = context.currentLoop();
+        appendInst(context, currentBlockIndex, OirSkipInst{loop ? loop->continueLabel : std::string{}});
+        return std::nullopt;
     }
+
+    return currentBlockIndex;
 }
 
-void emitBlock(
-    const SemanticAnalyzer& sema,
-    const BlockStmt* block,
-    const std::string& label,
-    FunctionBuilder& builder,
-    int indent,
-    const std::string& fallthroughLabel,
-    const OirEmitter& emitter) {
-    builder.out << indentText(indent) << "block " << label << ":\n";
-    if (!block) {
-        if (!fallthroughLabel.empty()) {
-            builder.out << indentText(indent + 1) << "goto " << fallthroughLabel << "\n";
-        }
-        return;
-    }
-
-    for (const auto& stmt : block->statements) {
-        emitStmt(sema, stmt.get(), builder, indent + 1, emitter);
-        if (emitter.stmtDefinitelyTerminates(stmt.get())) {
-            return;
-        }
-    }
-
-    if (!fallthroughLabel.empty()) {
-        builder.out << indentText(indent + 1) << "goto " << fallthroughLabel << "\n";
-    }
+std::string formatValue(const OirValue& value) {
+    return value.text;
 }
 
-} // namespace
-
-OirEmitter::OirEmitter(const SemanticAnalyzer& sema) : sema(sema) {}
-
-std::string OirEmitter::emit(const RealmDecl* realm) const {
-    if (!realm) {
-        return "oir.realm <unknown>\n";
-    }
-
-    std::ostringstream out;
-    out << "oir.realm " << realm->name << "\n";
-    for (const auto& decl : realm->declarations) {
-        out << emitDecl(decl.get());
-    }
-    return out.str();
-}
-
-std::string OirEmitter::emitDecl(const Decl* decl) const {
-    if (auto* fn = dynamic_cast<const FnDecl*>(decl)) {
-        return emitFn(fn);
-    }
-    if (auto* shape = dynamic_cast<const ShapeDecl*>(decl)) {
-        return emitShape(shape);
-    }
-    if (auto* choice = dynamic_cast<const ChoiceDecl*>(decl)) {
-        return emitChoice(choice);
-    }
-    return {};
-}
-
-std::string OirEmitter::emitFn(const FnDecl* fn) const {
-    std::ostringstream out;
-    const auto* signature = sema.lookupFunctionSignature(fn);
-    out << "oir.fn " << fn->name << "(";
-    for (size_t i = 0; i < fn->params.size(); ++i) {
-        if (i > 0) {
-            out << ", ";
-        }
-        out << fn->params[i].name << ": "
-            << (signature && i < signature->paramTypes.size() ? signature->paramTypes[i].describe() : "<unknown>");
-    }
-    out << ") -> " << (signature ? signature->returnType.describe() : "<unknown>") << "\n";
-
-    FunctionBuilder builder;
-    emitBlock(sema, fn->body.get(), "entry", builder, 1, {}, *this);
-    out << builder.out.str();
-    return out.str();
-}
-
-std::string OirEmitter::emitShape(const ShapeDecl* shape) const {
-    std::ostringstream out;
-    out << "oir.shape " << shape->name << "\n";
-    const auto* info = sema.lookupShape(shape->name);
-    if (!info) {
-        return out.str();
-    }
-
-    for (const auto& fieldName : info->fieldOrder) {
-        const auto it = info->fields.find(fieldName);
-        if (it == info->fields.end()) {
-            continue;
-        }
-        out << "  field " << fieldName << ": " << it->second.describe() << "\n";
-    }
-    return out.str();
-}
-
-std::string OirEmitter::emitChoice(const ChoiceDecl* choice) const {
-    std::ostringstream out;
-    out << "oir.choice " << choice->name << "\n";
-    const auto* info = sema.lookupChoice(choice->name);
-    if (!info) {
-        return out.str();
-    }
-
-    for (const auto& variantName : info->variantOrder) {
-        out << "  case " << variantName;
-        const auto it = info->variants.find(variantName);
-        if (it != info->variants.end() && !it->second.payloadTypes.empty()) {
-            out << "(";
-            for (size_t i = 0; i < it->second.payloadTypes.size(); ++i) {
+std::string formatInst(const OirInst& inst, int indent) {
+    const std::string pad = indentText(indent);
+    return std::visit(Overloaded{
+        [&](const OirHoldInst& value) {
+            std::ostringstream out;
+            out << pad << (value.isMutable ? "slot " : "hold ") << value.name << ": " << value.type;
+            if (value.init.has_value()) {
+                out << " = " << formatValue(*value.init);
+            }
+            out << "\n";
+            return out.str();
+        },
+        [&](const OirStoreInst& value) {
+            std::ostringstream out;
+            out << pad << "store " << value.target << " <- " << formatValue(value.value)
+                << " : " << value.value.type << "\n";
+            return out.str();
+        },
+        [&](const OirStoreFieldInst& value) {
+            std::ostringstream out;
+            out << pad << "store_field " << formatValue(value.object) << "." << value.field << " <- "
+                << formatValue(value.value) << " : " << value.value.type << "\n";
+            return out.str();
+        },
+        [&](const OirReturnInst& value) {
+            std::ostringstream out;
+            out << pad << "return " << formatValue(value.value) << " : " << value.value.type << "\n";
+            return out.str();
+        },
+        [&](const OirDiscardInst& value) {
+            std::ostringstream out;
+            out << pad << "discard " << formatValue(value.value) << " : " << value.value.type << "\n";
+            return out.str();
+        },
+        [&](const OirDropInst& value) {
+            std::ostringstream out;
+            out << pad << "drop " << value.name << " : " << value.type << "\n";
+            return out.str();
+        },
+        [&](const OirBranchInst& value) {
+            std::ostringstream out;
+            out << pad << "branch " << formatValue(value.condition) << " -> " << value.trueLabel << ", "
+                << value.falseLabel << "\n";
+            return out.str();
+        },
+        [&](const OirGotoInst& value) {
+            return pad + "goto " + value.targetLabel + "\n";
+        },
+        [&](const OirScanInst& value) {
+            std::ostringstream out;
+            out << pad << "scan " << value.itemName << ": " << value.itemType << " over "
+                << formatValue(value.iterable) << " -> " << value.bodyLabel << ", " << value.exitLabel << "\n";
+            return out.str();
+        },
+        [&](const OirPickInst& value) {
+            std::ostringstream out;
+            out << pad << "pick " << formatValue(value.value) << " : " << value.value.type << "\n";
+            for (const auto& item : value.cases) {
+                out << pad << "case " << item.tag;
+                if (!item.bindings.empty()) {
+                    out << "(";
+                    for (size_t i = 0; i < item.bindings.size(); ++i) {
+                        if (i > 0) {
+                            out << ", ";
+                        }
+                        out << item.bindings[i];
+                    }
+                    out << ")";
+                }
+                out << " -> " << item.targetLabel << "\n";
+            }
+            return out.str();
+        },
+        [&](const OirLiftInst& value) {
+            std::ostringstream out;
+            out << pad << "lift " << formatValue(value.value) << " -> " << value.okName << ", fail "
+                << value.failLabel << "\n";
+            return out.str();
+        },
+        [&](const OirStopInst& value) {
+            if (value.targetLabel.empty()) {
+                return pad + "stop\n";
+            }
+            return pad + "stop -> " + value.targetLabel + "\n";
+        },
+        [&](const OirSkipInst& value) {
+            if (value.targetLabel.empty()) {
+                return pad + "skip\n";
+            }
+            return pad + "skip -> " + value.targetLabel + "\n";
+        },
+        [&](const OirCallInst& value) {
+            std::ostringstream out;
+            if (value.result.has_value()) {
+                out << pad << *value.result << " = ";
+            } else {
+                out << pad;
+            }
+            out << "call " << value.callee << "(";
+            for (size_t i = 0; i < value.args.size(); ++i) {
                 if (i > 0) {
                     out << ", ";
                 }
-                out << it->second.payloadTypes[i].describe();
+                out << formatValue(value.args[i]);
             }
-            out << ")";
+            out << ") : " << value.type << "\n";
+            return out.str();
+        },
+        [&](const OirFieldInst& value) {
+            std::ostringstream out;
+            out << pad << value.result << " = field " << formatValue(value.object) << "." << value.field
+                << " : " << value.type << "\n";
+            return out.str();
+        },
+        [&](const OirBinaryInst& value) {
+            std::ostringstream out;
+            out << pad << value.result << " = " << value.op << " " << formatValue(value.left) << ", "
+                << formatValue(value.right) << " : " << value.type << "\n";
+            return out.str();
         }
-        out << "\n";
-    }
-    return out.str();
+    }, inst);
 }
 
-bool OirEmitter::blockDefinitelyTerminates(const BlockStmt* block) const {
+std::string formatDecl(const OirDecl& decl) {
+    return std::visit(Overloaded{
+        [&](const OirFunction& fn) {
+            std::ostringstream out;
+            out << "oir.fn " << fn.name << "(";
+            for (size_t i = 0; i < fn.params.size(); ++i) {
+                if (i > 0) {
+                    out << ", ";
+                }
+                out << fn.params[i].name << ": " << fn.params[i].type;
+            }
+            out << ") -> " << fn.returnType << "\n";
+            for (const auto& block : fn.blocks) {
+                out << "  block " << block.label << ":\n";
+                for (const auto& inst : block.insts) {
+                    out << formatInst(inst, 2);
+                }
+            }
+            return out.str();
+        },
+        [&](const OirShape& shape) {
+            std::ostringstream out;
+            out << "oir.shape " << shape.name << "\n";
+            for (const auto& field : shape.fields) {
+                out << "  field " << field.name << ": " << field.type << "\n";
+            }
+            return out.str();
+        },
+        [&](const OirChoice& choice) {
+            std::ostringstream out;
+            out << "oir.choice " << choice.name << "\n";
+            for (const auto& item : choice.cases) {
+                out << "  case " << item.name;
+                if (!item.payloadTypes.empty()) {
+                    out << "(";
+                    for (size_t i = 0; i < item.payloadTypes.size(); ++i) {
+                        if (i > 0) {
+                            out << ", ";
+                        }
+                        out << item.payloadTypes[i];
+                    }
+                    out << ")";
+                }
+                out << "\n";
+            }
+            return out.str();
+        }
+    }, decl);
+}
+
+bool blockDefinitelyTerminatesImpl(const OirEmitter& emitter, const BlockStmt* block) {
     if (!block) {
         return false;
     }
 
     for (const auto& stmt : block->statements) {
-        if (stmtDefinitelyTerminates(stmt.get())) {
+        if (emitter.stmtDefinitelyTerminates(stmt.get())) {
             return true;
         }
     }
     return false;
 }
 
-bool OirEmitter::stmtDefinitelyTerminates(const Stmt* stmt) const {
+bool stmtDefinitelyTerminatesImpl(const OirEmitter& emitter, const Stmt* stmt) {
     if (dynamic_cast<const GiveStmt*>(stmt) || dynamic_cast<const StopStmt*>(stmt) || dynamic_cast<const SkipStmt*>(stmt)) {
         return true;
     }
 
     if (auto* when = dynamic_cast<const WhenStmt*>(stmt)) {
-        return when->elseBlock && blockDefinitelyTerminates(when->thenBlock.get()) &&
-               blockDefinitelyTerminates(when->elseBlock.get());
+        return when->elseBlock && emitter.blockDefinitelyTerminates(when->thenBlock.get()) &&
+               emitter.blockDefinitelyTerminates(when->elseBlock.get());
     }
 
     if (auto* pick = dynamic_cast<const PickStmt*>(stmt)) {
@@ -467,7 +618,7 @@ bool OirEmitter::stmtDefinitelyTerminates(const Stmt* stmt) const {
             return false;
         }
         for (const auto& branch : pick->branches) {
-            if (!blockDefinitelyTerminates(branch.body.get())) {
+            if (!emitter.blockDefinitelyTerminates(branch.body.get())) {
                 return false;
             }
         }
@@ -475,31 +626,162 @@ bool OirEmitter::stmtDefinitelyTerminates(const Stmt* stmt) const {
     }
 
     if (auto* raw = dynamic_cast<const RawStmt*>(stmt)) {
-        return blockDefinitelyTerminates(raw->body.get());
+        return emitter.blockDefinitelyTerminates(raw->body.get());
     }
 
     return false;
 }
 
-} // namespace claw::frontend
-std::string claw::frontend::emitOirProgram(std::string_view entryRealm, const std::vector<OirUnitView>& units) {
-    std::ostringstream out;
-    out << "oir.program entry " << (entryRealm.empty() ? "<unknown>" : std::string(entryRealm)) << "\n";
+} // namespace
 
-    for (size_t i = 0; i < units.size(); ++i) {
+OirEmitter::OirEmitter(const SemanticAnalyzer& sema, const OwnershipResult* ownership)
+    : sema(sema), ownership(ownership) {}
+
+OirRealm OirEmitter::lowerRealm(const RealmDecl* realm) const {
+    OirRealm lowered;
+    lowered.name = realm ? realm->name : std::string("<unknown>");
+    if (!realm) {
+        return lowered;
+    }
+
+    for (const auto& decl : realm->declarations) {
+        if (auto loweredDecl = lowerDecl(decl.get())) {
+            lowered.decls.push_back(std::move(*loweredDecl));
+        }
+    }
+    return lowered;
+}
+
+std::string OirEmitter::emit(const RealmDecl* realm) const {
+    return formatOirRealm(lowerRealm(realm));
+}
+
+std::optional<OirDecl> OirEmitter::lowerDecl(const Decl* decl) const {
+    if (auto* fn = dynamic_cast<const FnDecl*>(decl)) {
+        return OirDecl{lowerFn(fn)};
+    }
+    if (auto* shape = dynamic_cast<const ShapeDecl*>(decl)) {
+        return OirDecl{lowerShape(shape)};
+    }
+    if (auto* choice = dynamic_cast<const ChoiceDecl*>(decl)) {
+        return OirDecl{lowerChoice(choice)};
+    }
+    return std::nullopt;
+}
+
+OirFunction OirEmitter::lowerFn(const FnDecl* fn) const {
+    FunctionLoweringContext context{sema, ownership};
+    context.function.name = fn ? fn->name : std::string("<unknown>");
+
+    const auto* signature = sema.lookupFunctionSignature(fn);
+    if (fn) {
+        for (size_t i = 0; i < fn->params.size(); ++i) {
+            context.function.params.push_back(OirParam{
+                fn->params[i].name,
+                signature && i < signature->paramTypes.size() ? signature->paramTypes[i].describe() : std::string("<unknown>")});
+        }
+    }
+    context.function.returnType = signature ? signature->returnType.describe() : std::string("<unknown>");
+
+    lowerBlock(sema, ownership, fn ? fn->body.get() : nullptr, "entry", context, {}, *this);
+    return std::move(context.function);
+}
+
+OirShape OirEmitter::lowerShape(const ShapeDecl* shape) const {
+    OirShape lowered;
+    lowered.name = shape ? shape->name : std::string("<unknown>");
+    if (!shape) {
+        return lowered;
+    }
+
+    const auto* info = sema.lookupShape(shape->name);
+    if (!info) {
+        return lowered;
+    }
+
+    for (const auto& fieldName : info->fieldOrder) {
+        const auto it = info->fields.find(fieldName);
+        if (it == info->fields.end()) {
+            continue;
+        }
+        lowered.fields.push_back(OirShapeField{fieldName, it->second.describe()});
+    }
+    return lowered;
+}
+
+OirChoice OirEmitter::lowerChoice(const ChoiceDecl* choice) const {
+    OirChoice lowered;
+    lowered.name = choice ? choice->name : std::string("<unknown>");
+    if (!choice) {
+        return lowered;
+    }
+
+    const auto* info = sema.lookupChoice(choice->name);
+    if (!info) {
+        return lowered;
+    }
+
+    for (const auto& variantName : info->variantOrder) {
+        OirChoiceCase item;
+        item.name = variantName;
+        const auto it = info->variants.find(variantName);
+        if (it != info->variants.end()) {
+            for (const auto& payloadType : it->second.payloadTypes) {
+                item.payloadTypes.push_back(payloadType.describe());
+            }
+        }
+        lowered.cases.push_back(std::move(item));
+    }
+    return lowered;
+}
+
+bool OirEmitter::blockDefinitelyTerminates(const BlockStmt* block) const {
+    return blockDefinitelyTerminatesImpl(*this, block);
+}
+
+bool OirEmitter::stmtDefinitelyTerminates(const Stmt* stmt) const {
+    return stmtDefinitelyTerminatesImpl(*this, stmt);
+}
+
+OirProgram buildOirProgram(std::string_view entryRealm, const std::vector<OirUnitView>& units) {
+    OirProgram program;
+    program.entryRealm = entryRealm.empty() ? std::string("<unknown>") : std::string(entryRealm);
+
+    for (const auto& unit : units) {
+        if (!unit.realm || !unit.sema) {
+            program.realms.push_back(OirRealm{"<unknown>", {}});
+            continue;
+        }
+        OirEmitter emitter(*unit.sema, unit.ownership);
+        program.realms.push_back(emitter.lowerRealm(unit.realm));
+    }
+
+    return program;
+}
+
+std::string formatOirRealm(const OirRealm& realm) {
+    std::ostringstream out;
+    out << "oir.realm " << (realm.name.empty() ? std::string("<unknown>") : realm.name) << "\n";
+    for (const auto& decl : realm.decls) {
+        out << formatDecl(decl);
+    }
+    return out.str();
+}
+
+std::string formatOirProgram(const OirProgram& program) {
+    std::ostringstream out;
+    out << "oir.program entry " << (program.entryRealm.empty() ? std::string("<unknown>") : program.entryRealm) << "\n";
+    for (size_t i = 0; i < program.realms.size(); ++i) {
         if (i > 0) {
             out << "\n";
         }
-
-        const auto& unit = units[i];
-        if (!unit.realm || !unit.sema) {
-            out << "oir.realm <unknown>\n";
-            continue;
-        }
-
-        OirEmitter emitter(*unit.sema);
-        out << emitter.emit(unit.realm);
+        out << formatOirRealm(program.realms[i]);
     }
-
     return out.str();
 }
+
+std::string emitOirProgram(std::string_view entryRealm, const std::vector<OirUnitView>& units) {
+    return formatOirProgram(buildOirProgram(entryRealm, units));
+}
+
+} // namespace claw::frontend

@@ -35,7 +35,15 @@ std::string ResolvedType::describe() const {
     if (!viewKind.empty()) {
         out << viewKind << ' ';
     }
-    out << (name.empty() ? "<unknown>" : name);
+    if (name.empty()) {
+        out << "<unknown>";
+    } else if (name == "IntLiteral") {
+        out << "integer literal";
+    } else if (name == "FloatLiteral") {
+        out << "float literal";
+    } else {
+        out << name;
+    }
     if (!params.empty()) {
         out << " of ";
         for (size_t i = 0; i < params.size(); ++i) {
@@ -55,6 +63,10 @@ ResolvedType makeUnknownType(const std::string& name) {
     return type;
 }
 
+TargetSpec defaultTargetSpec() {
+    return TargetSpec{};
+}
+
 bool sameType(const ResolvedType& left, const ResolvedType& right) {
     if (left.name != right.name || left.viewKind != right.viewKind || left.params.size() != right.params.size()) {
         return false;
@@ -69,12 +81,38 @@ bool sameType(const ResolvedType& left, const ResolvedType& right) {
     return true;
 }
 
+bool isNumericTypeName(const std::string& name) {
+    static const std::unordered_set<std::string> numericTypes = {
+        "Byte", "Rune", "Int8", "Int16", "Int32", "Int64", "Int128",
+        "UInt8", "UInt16", "UInt32", "UInt64", "UInt128",
+        "Bits8", "Bits16", "Bits32", "Bits64", "Bits128",
+        "Float32", "Float64", "USize", "ISize"};
+    return contains(numericTypes, name);
+}
+
+bool isIntegerLikeTypeName(const std::string& name) {
+    static const std::unordered_set<std::string> integerLikeTypes = {
+        "Byte", "Rune", "Int8", "Int16", "Int32", "Int64", "Int128",
+        "UInt8", "UInt16", "UInt32", "UInt64", "UInt128",
+        "Bits8", "Bits16", "Bits32", "Bits64", "Bits128",
+        "USize", "ISize"};
+    return contains(integerLikeTypes, name);
+}
+
+bool isIntegerLiteralType(const ResolvedType& type) {
+    return type.category == TypeCategory::Plain && type.viewKind.empty() && type.name == "IntLiteral";
+}
+
 bool canAssignType(const ResolvedType& from, const ResolvedType& to) {
     if (from.isUnknown() || to.isUnknown()) {
         return true;
     }
 
     if (sameType(from, to)) {
+        return true;
+    }
+
+    if (isIntegerLiteralType(from) && to.isPlain() && isIntegerLikeTypeName(to.name)) {
         return true;
     }
 

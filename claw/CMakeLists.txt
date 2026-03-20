@@ -10,6 +10,7 @@ add_library(claw_frontend
     src/parser/parser.cpp
     src/ir/air.cpp
     src/ir/oir.cpp
+    src/ir/lir.cpp
     src/analysis/types.cpp
     src/analysis/scope.cpp
     src/analysis/sema.cpp

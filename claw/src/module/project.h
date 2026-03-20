@@ -34,6 +34,7 @@ struct LoadedProject {
     std::filesystem::path inputPath;
     std::optional<std::filesystem::path> configPath;
     std::optional<ProjectConfig> config;
+    TargetSpec target;
     bool structuredPackage = false;
     size_t entryIndex = 0;
     std::vector<LoadedUnit> units;

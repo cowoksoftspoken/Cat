@@ -91,7 +91,50 @@ Token Lexer::readNumber() {
     while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek()))) {
         text += advance();
     }
-    return makeToken(TokenKind::IntLiteral, text, startLine, startColumn, pos - startPos);
+
+    bool isFloat = false;
+    if (!isAtEnd() && peek() == '.' && pos + 1 < source.length() &&
+        std::isdigit(static_cast<unsigned char>(source[pos + 1]))) {
+        isFloat = true;
+        text += advance();
+        while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek()))) {
+            text += advance();
+        }
+    }
+
+    const auto hasExponent = [&]() {
+        if (isAtEnd() || (peek() != 'e' && peek() != 'E')) {
+            return false;
+        }
+
+        size_t nextPos = pos + 1;
+        if (nextPos < source.length() && (source[nextPos] == '+' || source[nextPos] == '-')) {
+            ++nextPos;
+        }
+
+        return nextPos < source.length() && std::isdigit(static_cast<unsigned char>(source[nextPos]));
+    };
+
+    if (hasExponent()) {
+        isFloat = true;
+        text += advance();
+        if (!isAtEnd() && (peek() == '+' || peek() == '-')) {
+            text += advance();
+        }
+        while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek()))) {
+            text += advance();
+        }
+    }
+
+    if (!isAtEnd() && peek() == '_' && pos + 1 < source.length() &&
+        std::isalpha(static_cast<unsigned char>(source[pos + 1]))) {
+        text += advance();
+        while (!isAtEnd() && (std::isalnum(static_cast<unsigned char>(peek())) || peek() == '_')) {
+            text += advance();
+        }
+    }
+
+    return makeToken(isFloat ? TokenKind::FloatLiteral : TokenKind::IntLiteral, text, startLine, startColumn, pos - startPos);
 }
 
 Token Lexer::readString() {

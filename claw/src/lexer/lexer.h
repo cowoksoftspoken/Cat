@@ -31,6 +31,7 @@ enum class TokenKind {
     // Literals/Identifiers
     Identifier,
     IntLiteral,
+    FloatLiteral,
     StringLiteral,
     CharLiteral,
 

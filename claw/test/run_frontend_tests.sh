@@ -25,7 +25,13 @@ pass_cases=(
   "test/imports.cat"
   "test/prelude_prints.cat"
   "test/generic_instantiation.cat"
+  "test/definite_init.cat"
   "test/view_safety.cat"
+  "test/drop_schedule.cat"
+  "test/scalar_types.cat"
+  "test/float_literals.cat"
+  "test/target_size_types.cat"
+  "test/method_dispatch.cat"
   "test/pkg_demo"
   "test/pkg_rootless_demo"
 )
@@ -75,6 +81,20 @@ if [[ "$view_borrow_output" != *"error[ownership]: Cannot move value while it is
   exit 1
 fi
 
+echo "[check/fail] test/method_view_borrow_ownership.cat"
+method_view_borrow_output=""
+if method_view_borrow_output="$($CLAW_EXE check "$ROOT_DIR/test/method_view_borrow_ownership.cat" 2>&1)"; then
+  echo "expected method_view_borrow_ownership.cat to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$method_view_borrow_output" != *"error[ownership]: Cannot move value while it is borrowed -> message"* ]] ||
+   [[ "$method_view_borrow_output" != *" --> "* ]]; then
+  echo "method_view_borrow_ownership.cat failed, but not with the expected ownership diagnostics" >&2
+  printf '%s
+' "$method_view_borrow_output" >&2
+  exit 1
+fi
+
 echo "[check/fail] test/parse_diagnostics.cat"
 parse_output=""
 if parse_output="$($CLAW_EXE check "$ROOT_DIR/test/parse_diagnostics.cat" 2>&1)"; then
@@ -109,6 +129,34 @@ if [[ "$parse_recovery_count" -lt 3 ]]; then
   exit 1
 fi
 
+echo "[check/fail] test/definite_init_semantic.cat"
+definite_init_semantic_output=""
+if definite_init_semantic_output="$($CLAW_EXE check "$ROOT_DIR/test/definite_init_semantic.cat" 2>&1)"; then
+  echo "expected definite_init_semantic.cat to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$definite_init_semantic_output" != *"Immutable binding requires an initializer: value"* ]] ||
+   [[ "$definite_init_semantic_output" != *" --> "* ]]; then
+  echo "definite_init_semantic.cat did not contain the expected binding diagnostic" >&2
+  printf '%s
+' "$definite_init_semantic_output" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/definite_init_diagnostics.cat"
+definite_init_output=""
+if definite_init_output="$($CLAW_EXE check "$ROOT_DIR/test/definite_init_diagnostics.cat" 2>&1)"; then
+  echo "expected definite_init_diagnostics.cat to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$definite_init_output" != *"error[ownership]: Use of uninitialized value -> message"* ]] ||
+   [[ "$definite_init_output" != *" --> "* ]]; then
+  echo "definite_init_diagnostics.cat did not contain the expected initialization diagnostics" >&2
+  printf '%s
+' "$definite_init_output" >&2
+  exit 1
+fi
+
 echo "[check/fail] test/semantic_diagnostics.cat"
 semantic_output=""
 if semantic_output="$($CLAW_EXE check "$ROOT_DIR/test/semantic_diagnostics.cat" 2>&1)"; then
@@ -135,6 +183,70 @@ if [[ "$safety_output" != *"Safe functions cannot return edit views."* ]] ||
    [[ "$safety_output" != *"Raw address values may only appear inside raw blocks."* ]]; then
   echo "safety_diagnostics.cat did not contain the expected safety diagnostics" >&2
   printf '%s\n' "$safety_output" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/method_dispatch_diagnostics.cat"
+method_dispatch_output=""
+if method_dispatch_output="$($CLAW_EXE check "$ROOT_DIR/test/method_dispatch_diagnostics.cat" 2>&1)"; then
+  echo "expected method_dispatch_diagnostics.cat to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$method_dispatch_output" != *"Type 'Int32' does not provide method 'len'."* ]] ||
+   [[ "$method_dispatch_output" != *"Call argument type mismatch: expected USize, got float literal"* ]] ||
+   [[ "$method_dispatch_output" != *"Call argument type mismatch: expected Byte, got float literal"* ]] ||
+   [[ "$method_dispatch_output" != *"Method receiver type mismatch: expected edit Bytes, got look Bytes"* ]] ||
+   [[ "$method_dispatch_output" != *"Method receiver type mismatch: expected edit Vec, got look Vec"* ]]; then
+  echo "method_dispatch_diagnostics.cat did not contain the expected method diagnostics" >&2
+  printf '%s
+' "$method_dispatch_output" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/float_literal_diagnostics.cat"
+float_literal_output=""
+if float_literal_output="$($CLAW_EXE check "$ROOT_DIR/test/float_literal_diagnostics.cat" 2>&1)"; then
+  echo "expected float_literal_diagnostics.cat to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$float_literal_output" != *"Unknown numeric literal suffix: Float16"* ]] ||
+   [[ "$float_literal_output" != *"Float literal suffix must be Float32 or Float64, got UInt32."* ]] ||
+   [[ "$float_literal_output" != *"Integer literal '300' does not fit target type Byte."* ]] ||
+   [[ "$float_literal_output" != *"Integer literal '16777217' does not fit exactly in target type Float32."* ]] ||
+   [[ "$float_literal_output" != *"Float literal '1e-50' does not fit target type Float32."* ]] ||
+   [[ "$float_literal_output" != *"Initializer type mismatch for 'count': expected Int32, got float literal"* ]]; then
+  echo "float_literal_diagnostics.cat did not contain the expected float diagnostics" >&2
+  printf '%s
+' "$float_literal_output" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/scalar_type_diagnostics.cat"
+scalar_type_output=""
+if scalar_type_output="$($CLAW_EXE check "$ROOT_DIR/test/scalar_type_diagnostics.cat" 2>&1)"; then
+  echo "expected scalar_type_diagnostics.cat to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$scalar_type_output" != *"Call argument type mismatch: expected UInt16, got UInt32"* ]] ||
+   [[ "$scalar_type_output" != *"Initializer type mismatch for 'small': expected UInt16, got UInt64"* ]] ||
+   [[ "$scalar_type_output" != *"Incompatible arithmetic operands: UInt64 and USize"* ]]; then
+  echo "scalar_type_diagnostics.cat did not contain the expected scalar diagnostics" >&2
+  printf '%s
+' "$scalar_type_output" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/target_size_diagnostics.cat"
+target_size_output=""
+if target_size_output="$($CLAW_EXE check "$ROOT_DIR/test/target_size_diagnostics.cat" 2>&1)"; then
+  echo "expected target_size_diagnostics.cat to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$target_size_output" != *"Integer literal '18446744073709551616' does not fit target type USize."* ]] ||
+   [[ "$target_size_output" != *"Integer literal '9223372036854775808' does not fit target type ISize."* ]]; then
+  echo "target_size_diagnostics.cat did not contain the expected target-size diagnostics" >&2
+  printf '%s
+' "$target_size_output" >&2
   exit 1
 fi
 
@@ -219,6 +331,46 @@ if [[ "$air_output" != "$expected_air_output" ]]; then
   exit 1
 fi
 
+echo "[emit-air] test/method_dispatch_air.cat"
+method_air_output="$($CLAW_EXE emit-air "$ROOT_DIR/test/method_dispatch_air.cat" | normalize_text)"
+expected_method_air_output="$(cat "$ROOT_DIR/test/method_dispatch_air.expect" | normalize_text)"
+if [[ "$method_air_output" != "$expected_method_air_output" ]]; then
+  echo "method dispatch emit_air snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s
+' "$expected_method_air_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s
+' "$method_air_output" >&2
+  exit 1
+fi
+
+echo "[emit-air] test/float_emit_air.cat"
+float_air_output="$($CLAW_EXE emit-air "$ROOT_DIR/test/float_emit_air.cat" | normalize_text)"
+expected_float_air_output="$(cat "$ROOT_DIR/test/float_emit_air.expect" | normalize_text)"
+if [[ "$float_air_output" != "$expected_float_air_output" ]]; then
+  echo "float emit_air snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s
+' "$expected_float_air_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s
+' "$float_air_output" >&2
+  exit 1
+fi
+
+echo "[emit-air] test/scalar_emit_air.cat"
+scalar_air_output="$($CLAW_EXE emit-air "$ROOT_DIR/test/scalar_emit_air.cat" | normalize_text)"
+expected_scalar_air_output="$(cat "$ROOT_DIR/test/scalar_emit_air.expect" | normalize_text)"
+if [[ "$scalar_air_output" != "$expected_scalar_air_output" ]]; then
+  echo "scalar emit_air snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s\n' "$expected_scalar_air_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s\n' "$scalar_air_output" >&2
+  exit 1
+fi
+
 echo "[emit-oir] test/emit_air.cat"
 oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/emit_air.cat" | normalize_text)"
 expected_oir_output="$(cat "$ROOT_DIR/test/emit_oir.expect" | normalize_text)"
@@ -231,6 +383,18 @@ if [[ "$oir_output" != "$expected_oir_output" ]]; then
   exit 1
 fi
 
+echo "[emit-oir] test/drop_schedule.cat"
+drop_schedule_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/drop_schedule.cat" | normalize_text)"
+expected_drop_schedule_output="$(cat "$ROOT_DIR/test/drop_schedule_oir.expect" | normalize_text)"
+if [[ "$drop_schedule_output" != "$expected_drop_schedule_output" ]]; then
+  echo "drop_schedule emit_oir snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s\n' "$expected_drop_schedule_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s\n' "$drop_schedule_output" >&2
+  exit 1
+fi
+
 echo "[emit-oir] test/pkg_demo"
 package_oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/pkg_demo" | normalize_text)"
 expected_package_oir_output="$(cat "$ROOT_DIR/test/pkg_demo/emit_oir.expect" | normalize_text)"
@@ -240,6 +404,48 @@ if [[ "$package_oir_output" != "$expected_package_oir_output" ]]; then
   printf '%s\n' "$expected_package_oir_output" >&2
   echo "--- actual ---" >&2
   printf '%s\n' "$package_oir_output" >&2
+  exit 1
+fi
+
+echo "[emit-lir] test/emit_air.cat"
+lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/emit_air.cat" | normalize_text)"
+expected_lir_output="$(cat "$ROOT_DIR/test/emit_lir.expect" | normalize_text)"
+if [[ "$lir_output" != "$expected_lir_output" ]]; then
+  echo "emit_lir snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s
+' "$expected_lir_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s
+' "$lir_output" >&2
+  exit 1
+fi
+
+echo "[emit-lir] test/drop_schedule.cat"
+drop_schedule_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/drop_schedule.cat" | normalize_text)"
+expected_drop_schedule_lir_output="$(cat "$ROOT_DIR/test/drop_schedule_lir.expect" | normalize_text)"
+if [[ "$drop_schedule_lir_output" != "$expected_drop_schedule_lir_output" ]]; then
+  echo "drop_schedule emit_lir snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s
+' "$expected_drop_schedule_lir_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s
+' "$drop_schedule_lir_output" >&2
+  exit 1
+fi
+
+echo "[emit-lir] test/pkg_demo"
+package_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/pkg_demo" | normalize_text)"
+expected_package_lir_output="$(cat "$ROOT_DIR/test/pkg_demo/emit_lir.expect" | normalize_text)"
+if [[ "$package_lir_output" != "$expected_package_lir_output" ]]; then
+  echo "pkg_demo emit_lir snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s
+' "$expected_package_lir_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s
+' "$package_lir_output" >&2
   exit 1
 fi
 

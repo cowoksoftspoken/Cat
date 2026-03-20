@@ -1,0 +1,9 @@
+realm test.target_size_diagnostics
+
+fn too_wide_usize() -> USize {
+    give 18446744073709551616
+}
+
+fn too_wide_isize() -> ISize {
+    give 9223372036854775808
+}

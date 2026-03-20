@@ -12,10 +12,12 @@ oir.fn classify(cfg: look Config of Int32, item: Maybe of Int32) -> Int32
     %t1 = field cfg.payload : Int32
     call print(%t1) : Unit
     pick item : Maybe of Int32
-    case none -> pick_none_1
-    case some(value) -> pick_some_2
-  block pick_none_1:
+    case none -> pick_none_0
+    case some(value) -> pick_some_1
+  block pick_none_0:
     call println("empty") : Unit
+    drop item : Maybe of Int32
     return 0 : Int32
-  block pick_some_2:
+  block pick_some_1:
+    drop item : Maybe of Int32
     return value : Int32
