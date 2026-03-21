@@ -1,0 +1,12 @@
+realm main
+
+import term.{emit}
+
+fn main() -> Int32 {
+    hold start: Int32 = emit("boot")
+    print(emit("trace"))
+    when emit("ready") {
+        println("ok")
+    }
+    give emit("done")
+}

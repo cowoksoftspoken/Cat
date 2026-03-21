@@ -121,6 +121,130 @@ void pushConfigDiagnostic(
         path.string()});
 }
 
+std::vector<std::string> splitInlineTableEntries(std::string_view text) {
+    std::vector<std::string> entries;
+    bool inString = false;
+    bool escaped = false;
+    int braceDepth = 0;
+    size_t start = 0;
+
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (c == '"' && !escaped) {
+            inString = !inString;
+        } else if (!inString) {
+            if (c == '{') {
+                ++braceDepth;
+            } else if (c == '}' && braceDepth > 0) {
+                --braceDepth;
+            } else if (c == ',' && braceDepth == 0) {
+                entries.push_back(trim(text.substr(start, i - start)));
+                start = i + 1;
+            }
+        }
+
+        escaped = (c == '\\' && !escaped);
+        if (c != '\\') {
+            escaped = false;
+        }
+    }
+
+    if (start <= text.size()) {
+        entries.push_back(trim(text.substr(start)));
+    }
+    return entries;
+}
+
+bool parseTomlDependencyInlineSpec(
+    const std::filesystem::path& path,
+    size_t lineNumber,
+    size_t valueColumn,
+    const std::string& dependencyName,
+    std::string_view value,
+    std::vector<Diagnostic>* diagnostics,
+    DependencySpec* spec) {
+    if (!spec || value.size() < 2 || value.front() != '{' || value.back() != '}') {
+        pushConfigDiagnostic(diagnostics, path, lineNumber, valueColumn, std::max<size_t>(1, value.size()), "Dependency inline tables must use '{ ... }'.");
+        return false;
+    }
+
+    DependencySpec parsed;
+    const auto entries = splitInlineTableEntries(trim(value.substr(1, value.size() - 2)));
+    std::unordered_set<std::string> seenKeys;
+    for (const auto& entry : entries) {
+        if (entry.empty()) {
+            continue;
+        }
+
+        const size_t equalPos = findUnquotedChar(entry, '=');
+        if (equalPos == std::string::npos) {
+            pushConfigDiagnostic(diagnostics, path, lineNumber, valueColumn, std::max<size_t>(1, value.size()), "Dependency inline table entries must use 'key = value'.");
+            return false;
+        }
+
+        const std::string key = trim(std::string_view(entry).substr(0, equalPos));
+        const std::string entryValue = trim(std::string_view(entry).substr(equalPos + 1));
+        if (!seenKeys.insert(key).second) {
+            pushConfigDiagnostic(diagnostics, path, lineNumber, valueColumn, std::max<size_t>(1, value.size()), "Duplicate key '" + key + "' in dependency inline table for '" + dependencyName + "'.");
+            return false;
+        }
+
+        if (key == "version") {
+            if (!isQuotedString(entryValue)) {
+                pushConfigDiagnostic(diagnostics, path, lineNumber, valueColumn, std::max<size_t>(1, value.size()), "Dependency inline table key 'version' must use a quoted string.");
+                return false;
+            }
+            parsed.version = unquoteString(entryValue);
+            continue;
+        }
+
+        if (key == "abi") {
+            if (!isQuotedString(entryValue)) {
+                pushConfigDiagnostic(diagnostics, path, lineNumber, valueColumn, std::max<size_t>(1, value.size()), "Dependency inline table key 'abi' must use a quoted string.");
+                return false;
+            }
+            parsed.abi = unquoteString(entryValue);
+            if (parsed.abi.empty()) {
+                pushConfigDiagnostic(diagnostics, path, lineNumber, valueColumn, std::max<size_t>(1, value.size()), "Dependency ABI may not be empty.");
+                return false;
+            }
+            continue;
+        }
+
+        if (!isIdentifier(key)) {
+            pushConfigDiagnostic(diagnostics, path, lineNumber, valueColumn, std::max<size_t>(1, value.size()), "Dependency inline table key '" + key + "' is not a valid identifier.");
+            return false;
+        }
+        if (!isQuotedString(entryValue)) {
+            pushConfigDiagnostic(diagnostics, path, lineNumber, valueColumn, std::max<size_t>(1, value.size()), "Dependency function contracts must use quoted strings.");
+            return false;
+        }
+
+        const std::string contractText = trim(unquoteString(entryValue));
+        DependencyFunctionContract contract;
+        if (contractText.rfind("raw ", 0) == 0) {
+            contract.rawOnly = true;
+            contract.declaration = trim(std::string_view(contractText).substr(4));
+        } else if (contractText.rfind("safe ", 0) == 0) {
+            contract.rawOnly = false;
+            contract.declaration = trim(std::string_view(contractText).substr(5));
+        } else {
+            pushConfigDiagnostic(diagnostics, path, lineNumber, valueColumn, std::max<size_t>(1, value.size()), "Dependency function contracts must start with 'raw ' or 'safe ' before the function declaration.");
+            return false;
+        }
+
+        if (contract.declaration.empty()) {
+            pushConfigDiagnostic(diagnostics, path, lineNumber, valueColumn, std::max<size_t>(1, value.size()), "Dependency function contract for '" + key + "' is empty.");
+            return false;
+        }
+
+        parsed.functions[key] = std::move(contract);
+    }
+
+    *spec = std::move(parsed);
+    return true;
+}
+
 ProjectConfig parseTomlConfig(
     const std::filesystem::path& path,
     const std::string& source,
@@ -230,16 +354,21 @@ ProjectConfig parseTomlConfig(
             pushConfigDiagnostic(diagnostics, path, lineNumber, valueColumn, 1, "Dependency values must be a quoted version string or an inline table.");
             continue;
         }
+
+        DependencySpec dependencySpec;
         if (isQuotedString(value)) {
-            config.dependencies[key] = unquoteString(value);
-            continue;
-        }
-        if (value.front() == '{' && value.back() == '}') {
-            config.dependencies[key] = value;
+            dependencySpec.version = unquoteString(value);
+        } else if (value.front() == '{' && value.back() == '}') {
+            if (!parseTomlDependencyInlineSpec(path, lineNumber, valueColumn, key, value, diagnostics, &dependencySpec)) {
+                continue;
+            }
+        } else {
+            pushConfigDiagnostic(diagnostics, path, lineNumber, valueColumn, std::max<size_t>(1, value.size()), "Dependency values must be a quoted version string or an inline table.");
             continue;
         }
 
-        pushConfigDiagnostic(diagnostics, path, lineNumber, valueColumn, std::max<size_t>(1, value.size()), "Dependency values must be a quoted version string or an inline table.");
+        config.dependencies[key] = dependencySpec.version;
+        config.dependencySpecs[key] = std::move(dependencySpec);
     }
 
     if (!sawProjectSection) {
@@ -379,12 +508,16 @@ ProjectConfig parseYamlConfig(
             pushConfigDiagnostic(diagnostics, path, lineNumber, indent + 1, std::max<size_t>(1, colonPos), "Duplicate dependency declaration: '" + key + "'.");
             continue;
         }
+        DependencySpec dependencySpec;
         if (value.empty()) {
             config.dependencies[key] = "";
+            config.dependencySpecs[key] = dependencySpec;
             continue;
         }
         if (isQuotedString(value) || value == "{}") {
-            config.dependencies[key] = value == "{}" ? std::string{} : unquoteString(value);
+            dependencySpec.version = value == "{}" ? std::string{} : unquoteString(value);
+            config.dependencies[key] = dependencySpec.version;
+            config.dependencySpecs[key] = std::move(dependencySpec);
             continue;
         }
 

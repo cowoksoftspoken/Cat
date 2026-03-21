@@ -13,6 +13,7 @@ enum class LirSafetyTag {
     None,
     ProvenSafe,
     BoundsCheckRequired,
+    UnsafeBoundary,
 };
 
 enum class LirCallKind {
@@ -20,6 +21,7 @@ enum class LirCallKind {
     ModuleDirect,
     Runtime,
     Builtin,
+    External,
     Foreign,
 };
 
@@ -32,6 +34,7 @@ struct LirValue {
 struct LirParam {
     std::string name;
     std::string type;
+    AbiPassKind passKind = AbiPassKind::Unknown;
 };
 
 struct LirPhiInput {
@@ -66,6 +69,13 @@ struct LirPhiInst {
     std::string result;
     std::string type;
     std::vector<LirPhiInput> inputs;
+};
+
+struct LirBoundsCheckInst {
+    std::string kind;
+    std::string subject;
+    std::vector<LirValue> args;
+    std::string failLabel;
 };
 
 struct LirStoreInst {
@@ -120,6 +130,7 @@ struct LirSwitchInst {
 struct LirLiftInst {
     LirValue value;
     std::string okName;
+    std::string successLabel;
     std::string failLabel;
 };
 
@@ -131,6 +142,14 @@ struct LirContinueInst {
     std::string targetLabel;
 };
 
+struct LirExternalCallInfo {
+    std::string dependencyRoot;
+    std::string abi = "unknown";
+    std::string linkageName;
+    bool rawOnly = true;
+    bool opaqueResult = false;
+};
+
 struct LirCallInst {
     std::optional<std::string> result;
     std::string callee;
@@ -139,6 +158,7 @@ struct LirCallInst {
     LirCallKind kind = LirCallKind::Direct;
     LirSafetyTag safety = LirSafetyTag::None;
     std::string hook;
+    std::optional<LirExternalCallInfo> externalInfo;
 };
 
 struct LirFieldInst {
@@ -165,6 +185,7 @@ struct LirDefectInst {
 using LirInst = std::variant<
     LirObjectInst,
     LirPhiInst,
+    LirBoundsCheckInst,
     LirStoreInst,
     LirStoreFieldInst,
     LirReturnInst,
@@ -184,6 +205,7 @@ using LirInst = std::variant<
 
 struct LirBlock {
     std::string label;
+    std::optional<std::string> rawRegion;
     std::vector<std::string> predecessors;
     std::vector<LirInst> insts;
 };
@@ -192,17 +214,25 @@ struct LirFunction {
     std::string name;
     std::vector<LirParam> params;
     std::string returnType;
+    AbiPassKind returnPassKind = AbiPassKind::Unknown;
+    SymbolLinkInfo linkage;
     std::vector<LirBlock> blocks;
 };
 
 struct LirShape {
     std::string name;
+    std::vector<std::string> typeParams;
     std::vector<LirShapeField> fields;
+    SymbolLinkInfo linkage;
+    std::optional<TypeLayoutInfo> layout;
 };
 
 struct LirChoice {
     std::string name;
+    std::vector<std::string> typeParams;
     std::vector<LirChoiceCase> cases;
+    SymbolLinkInfo linkage;
+    std::optional<TypeLayoutInfo> layout;
 };
 
 using LirDecl = std::variant<LirFunction, LirShape, LirChoice>;
@@ -214,6 +244,7 @@ struct LirRealm {
 
 struct LirProgram {
     std::string entryRealm;
+    std::string entrySymbol;
     std::vector<LirRealm> realms;
 };
 

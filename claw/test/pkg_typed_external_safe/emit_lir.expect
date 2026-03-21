@@ -1,0 +1,9 @@
+lir.program entry main symbol main::main
+lir.realm main
+lir.fn main() -> Int32 [scalar] [abi=claw link=internal symbol=main::main ffi=false]
+  block entry:
+    %t0 = call.external status() : Int32 hook external.claw.term.status [abi=claw dep=term symbol=status safe] [proven-safe]
+    alloc stack hold code : Int32
+    store code <- %t0 : Int32
+    %t1 = call.external bump(code) : Int32 hook external.claw.term.bump [abi=claw dep=term symbol=bump safe] [proven-safe]
+    return %t1 : Int32

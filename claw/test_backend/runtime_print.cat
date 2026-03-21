@@ -1,0 +1,6 @@
+realm test_backend.runtime_print
+
+fn main() {
+    println("hello")
+    print(7)
+}

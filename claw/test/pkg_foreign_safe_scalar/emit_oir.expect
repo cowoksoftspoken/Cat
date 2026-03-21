@@ -1,0 +1,7 @@
+oir.program entry main symbol main::main
+oir.realm main
+oir.fn main() -> Unit [void] [abi=claw link=internal symbol=main::main ffi=false]
+  block entry:
+    %t0 = call add(10_UInt32) : UInt32 [extern abi=c dep=native symbol=add safe]
+    hold value: UInt32 = %t0
+    call println(value) : Unit

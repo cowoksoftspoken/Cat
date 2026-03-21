@@ -35,6 +35,7 @@ public:
     const ResolvedType* lookupExprType(const Expr* expr) const;
     const ShapeInfo* lookupShape(const std::string& name) const;
     const ChoiceInfo* lookupChoice(const std::string& name) const;
+    const TargetSpec& targetSpec() const;
 
 private:
     ScopeTree scopes;
@@ -57,6 +58,8 @@ private:
     void registerImports(const RealmDecl* realm);
     void declareTopLevel(const RealmDecl* realm);
     void resolveTopLevelTypes(const RealmDecl* realm);
+    void validateNamedLayouts(const RealmDecl* realm);
+    bool validateOwnedLayoutDependency(const std::string& rootName, const ResolvedType& type, const SourceSpan& span, std::vector<std::string>& stack);
 
     void analyzeDecl(Decl* decl);
     void analyzeFnDecl(FnDecl* fn);

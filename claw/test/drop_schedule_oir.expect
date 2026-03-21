@@ -1,5 +1,5 @@
 oir.realm test.drop_schedule
-oir.fn schedule_drop(flag: Int32) -> Int32
+oir.fn schedule_drop(flag: Int32 [scalar]) -> Int32 [scalar] [abi=claw link=internal symbol=test.drop_schedule::schedule_drop ffi=false]
   block entry:
     slot message: Text = "hello"
     %t0 = eq flag, 0 : Bool

@@ -262,6 +262,27 @@ std::string describeCalleeExpr(const Expr* expr) {
     return "<callee>";
 }
 
+ResolvedType makeOpaqueExternalCallType(const Expr* callee) {
+    return makeOpaqueExternalType(describeCalleeExpr(callee));
+}
+
+std::string opaqueExternalValueUseMessage(const ResolvedType& type, const std::string& context) {
+    const std::string subject = type.name.empty()
+        ? std::string("Opaque external call result")
+        : "Opaque external call result from '" + type.name + "'";
+    return subject + " may only be used as a standalone statement, not in " + context + ".";
+}
+
+std::string opaqueExternalRawRequirementMessage(const Expr* callee) {
+    return "Opaque external call '" + describeCalleeExpr(callee) +
+        "' requires an explicit raw block or a shared typed import contract.";
+}
+
+std::string typedExternalRawRequirementMessage(const Expr* callee) {
+    return "External call '" + describeCalleeExpr(callee) +
+        "' is declared raw-only and requires an explicit raw block.";
+}
+
 struct BuiltinMethodSpec {
     std::string receiverName;
     std::string methodName;
@@ -463,6 +484,10 @@ const ChoiceInfo* SemanticAnalyzer::lookupChoice(const std::string& name) const 
     return it != analysisResult.choicesByName.end() ? &it->second : nullptr;
 }
 
+const TargetSpec& SemanticAnalyzer::targetSpec() const {
+    return target;
+}
+
 void SemanticAnalyzer::reportError(const std::string& msg) {
     diagnostics.push_back(Diagnostic{"semantic", msg, {}});
 }
@@ -513,6 +538,7 @@ void SemanticAnalyzer::analyze(RealmDecl* realm) {
     registerImports(realm);
     declareTopLevel(realm);
     resolveTopLevelTypes(realm);
+    validateNamedLayouts(realm);
 
     for (auto& decl : realm->declarations) {
         analyzeDecl(decl.get());
@@ -694,6 +720,128 @@ void SemanticAnalyzer::resolveTopLevelTypes(const RealmDecl* realm) {
     }
 }
 
+
+void SemanticAnalyzer::validateNamedLayouts(const RealmDecl* realm) {
+    for (const auto& decl : realm->declarations) {
+        if (auto* shape = dynamic_cast<ShapeDecl*>(decl.get())) {
+            bool hadSpecificError = false;
+            std::vector<std::string> stack{shape->name};
+            const auto* info = lookupShape(shape->name);
+            if (info) {
+                for (const auto& field : shape->fields) {
+                    const auto fieldIt = info->fields.find(field.name);
+                    if (fieldIt == info->fields.end()) {
+                        continue;
+                    }
+                    hadSpecificError = validateOwnedLayoutDependency(shape->name, fieldIt->second, field.span, stack) || hadSpecificError;
+                }
+            }
+
+            ResolvedType type = makeOwnedType(shape->name);
+            const auto layout = computeTypeLayout(type, analysisResult, target);
+            if (!layout.has_value() && !hadSpecificError) {
+                reportError(shape, "Type layout could not be resolved for '" + shape->name + "'. Use indirection or remove recursive owned fields.");
+            }
+        } else if (auto* choice = dynamic_cast<ChoiceDecl*>(decl.get())) {
+            bool hadSpecificError = false;
+            std::vector<std::string> stack{choice->name};
+            const auto* info = lookupChoice(choice->name);
+            if (info) {
+                for (const auto& variant : choice->variants) {
+                    const auto variantIt = info->variants.find(variant.tag);
+                    if (variantIt == info->variants.end()) {
+                        continue;
+                    }
+                    for (size_t i = 0; i < variant.payloads.size() && i < variantIt->second.payloadTypes.size(); ++i) {
+                        hadSpecificError = validateOwnedLayoutDependency(choice->name, variantIt->second.payloadTypes[i], variant.payloads[i].span, stack) || hadSpecificError;
+                    }
+                }
+            }
+
+            ResolvedType type = makeOwnedType(choice->name);
+            const auto layout = computeTypeLayout(type, analysisResult, target);
+            if (!layout.has_value() && !hadSpecificError) {
+                reportError(choice, "Type layout could not be resolved for '" + choice->name + "'. Use indirection or remove recursive owned payloads.");
+            }
+        }
+    }
+}
+
+bool SemanticAnalyzer::validateOwnedLayoutDependency(
+    const std::string& rootName,
+    const ResolvedType& type,
+    const SourceSpan& span,
+    std::vector<std::string>& stack) {
+    if (type.isUnknown() || type.isOpaqueExternal() || type.isPlain() || type.isView() || type.isGeneric) {
+        return false;
+    }
+    if (type.name == "Text" || type.name == "Bytes" || type.name == "Span" || type.name == "CStr" ||
+        type.name == "OwnedCStr" || type.name == "Vec" || type.name == "Table" || type.name == "Set" ||
+        type.name == "Heap" || type.name == "Ring" || type.name == "Arena" || type.name == "Pool" ||
+        type.name == "Anchor" || type.name == "Addr" || type.name == "RawPtr" || type.name == "RawMut" ||
+        type.name == "Fn") {
+        return false;
+    }
+
+    const auto stackIt = std::find(stack.begin(), stack.end(), type.name);
+    if (stackIt != stack.end()) {
+        std::string cycle;
+        for (auto it = stackIt; it != stack.end(); ++it) {
+            if (!cycle.empty()) {
+                cycle += " -> ";
+            }
+            cycle += *it;
+        }
+        cycle += " -> " + type.name;
+        reportError(span, "Owned type layout cycle requires indirection: " + cycle + ".");
+        return true;
+    }
+
+    const auto* shape = lookupShape(type.name);
+    const auto* choice = lookupChoice(type.name);
+    if (!shape && !choice) {
+        return false;
+    }
+
+    stack.push_back(type.name);
+    bool hadError = false;
+
+    if (shape) {
+        for (const auto& fieldName : shape->fieldOrder) {
+            const auto fieldIt = shape->fields.find(fieldName);
+            if (fieldIt == shape->fields.end()) {
+                continue;
+            }
+            const ResolvedType fieldType = instantiateGenericType(
+                fieldIt->second,
+                shape->typeParams,
+                type.params,
+                "shape '" + type.name + "'");
+            hadError = validateOwnedLayoutDependency(rootName, fieldType, span, stack) || hadError;
+        }
+    }
+
+    if (choice) {
+        for (const auto& variantName : choice->variantOrder) {
+            const auto variantIt = choice->variants.find(variantName);
+            if (variantIt == choice->variants.end()) {
+                continue;
+            }
+            for (const auto& payloadType : variantIt->second.payloadTypes) {
+                const ResolvedType instantiatedPayload = instantiateGenericType(
+                    payloadType,
+                    choice->typeParams,
+                    type.params,
+                    "choice '" + type.name + "'");
+                hadError = validateOwnedLayoutDependency(rootName, instantiatedPayload, span, stack) || hadError;
+            }
+        }
+    }
+
+    stack.pop_back();
+    return hadError;
+}
+
 ResolvedType SemanticAnalyzer::resolveTypeNode(
     const TypeNode* node,
     const std::unordered_set<std::string>& localTypeParams) {
@@ -729,7 +877,7 @@ ResolvedType SemanticAnalyzer::instantiateGenericType(
 std::optional<MethodSignature> SemanticAnalyzer::lookupMethodSignature(
     const ResolvedType& receiverType,
     const std::string& methodName) const {
-    if (receiverType.isUnknown()) {
+    if (receiverType.isUnknown() || receiverType.isOpaqueExternal()) {
         return std::nullopt;
     }
 
@@ -881,6 +1029,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         const ResolvedType valueType = bind->value
             ? analyzeExpr(bind->value.get(), bind->type ? &declaredType : nullptr)
             : makeUnknownType();
+        const bool opaqueInitializer = bind->value && valueType.isOpaqueExternal();
         ResolvedType finalType = bind->type ? declaredType : normalizeInferredLiteralType(valueType);
 
         if (!bind->type && !bind->value) {
@@ -892,10 +1041,19 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             reportError(bind, "Immutable binding requires an initializer: " + bind->name);
         }
 
+        if (opaqueInitializer) {
+            reportError(
+                bind->value.get(),
+                opaqueExternalValueUseMessage(valueType, "binding initializer for '" + bind->name + "'"));
+            if (!bind->type) {
+                finalType = makeUnknownType();
+            }
+        }
+
         const bool bindingTypeMatches = finalType.isView()
             ? canPassArgumentType(bind->value.get(), valueType, finalType)
             : canAssignType(valueType, finalType);
-        if (bind->type && bind->value && !bindingTypeMatches) {
+        if (bind->type && bind->value && !opaqueInitializer && !bindingTypeMatches) {
             reportError(
                 bind,
                 "Initializer type mismatch for '" + bind->name + "': expected " +
@@ -933,6 +1091,8 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             reportError(assign, "Raw address values may only appear inside raw blocks.");
         }
 
+        const bool opaqueAssignedValue = assign->value && valueType.isOpaqueExternal();
+
         if (auto* ident = dynamic_cast<IdentExpr*>(assign->target.get())) {
             const auto sym = lookupSymbol(ident->name);
             if (!sym) {
@@ -944,18 +1104,24 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                     reportError(assign, "Cannot assign to immutable binding: " + ident->name);
                 }
 
-                const bool assignmentTypeMatches = sym->type.isView()
-                    ? canPassArgumentType(assign->value.get(), valueType, sym->type)
-                    : canAssignType(valueType, sym->type);
-                if (!assignmentTypeMatches) {
+                if (opaqueAssignedValue) {
                     reportError(
-                        assign,
-                        "Assigned value type mismatch for '" + ident->name + "': expected " +
-                            sym->type.describe() + ", got " + valueType.describe());
-                }
+                        assign->value.get(),
+                        opaqueExternalValueUseMessage(valueType, "assignment to '" + ident->name + "'"));
+                } else {
+                    const bool assignmentTypeMatches = sym->type.isView()
+                        ? canPassArgumentType(assign->value.get(), valueType, sym->type)
+                        : canAssignType(valueType, sym->type);
+                    if (!assignmentTypeMatches) {
+                        reportError(
+                            assign,
+                            "Assigned value type mismatch for '" + ident->name + "': expected " +
+                                sym->type.describe() + ", got " + valueType.describe());
+                    }
 
-                if (sym->type.isView()) {
-                    sym->viewSourceParamIndex = resolveViewSourceParam(assign->value.get());
+                    if (sym->type.isView()) {
+                        sym->viewSourceParamIndex = resolveViewSourceParam(assign->value.get());
+                    }
                 }
             }
         } else if (auto* member = dynamic_cast<MemberExpr*>(assign->target.get())) {
@@ -977,7 +1143,9 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                 reportError(assign, "Member assignment requires mutable storage or an edit view.");
             }
 
-            if (!canAssignType(valueType, targetType)) {
+            if (opaqueAssignedValue) {
+                reportError(assign->value.get(), opaqueExternalValueUseMessage(valueType, "member assignment"));
+            } else if (!canAssignType(valueType, targetType)) {
                 reportError(
                     assign,
                     "Assigned value type mismatch for member access: expected " +
@@ -993,7 +1161,9 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         const ResolvedType valueType = give->value
             ? analyzeExpr(give->value.get(), currentSignature ? &currentSignature->returnType : nullptr)
             : makePlainType("Unit");
-        if (currentSignature && currentSignature->returnType.isView()) {
+        if (valueType.isOpaqueExternal()) {
+            reportError(give->value.get(), opaqueExternalValueUseMessage(valueType, "return value"));
+        } else if (currentSignature && currentSignature->returnType.isView()) {
             if (!canBorrowAsView(valueType, currentSignature->returnType)) {
                 reportError(
                     give,
@@ -1034,7 +1204,9 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
 
     if (auto* when = dynamic_cast<WhenStmt*>(stmt)) {
         const ResolvedType conditionType = analyzeExpr(when->condition.get());
-        if (!isConditionLike(conditionType)) {
+        if (conditionType.isOpaqueExternal()) {
+            reportError(when->condition.get(), opaqueExternalValueUseMessage(conditionType, "'when' condition"));
+        } else if (!isConditionLike(conditionType)) {
             reportError(when->condition.get(), "'when' condition must be Bool, got " + conditionType.describe());
         }
 
@@ -1053,7 +1225,9 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
     if (auto* loop = dynamic_cast<LoopStmt*>(stmt)) {
         if (loop->condition) {
             const ResolvedType conditionType = analyzeExpr(loop->condition.get());
-            if (!isConditionLike(conditionType)) {
+            if (conditionType.isOpaqueExternal()) {
+                reportError(loop->condition.get(), opaqueExternalValueUseMessage(conditionType, "'loop' condition"));
+            } else if (!isConditionLike(conditionType)) {
                 reportError(loop->condition.get(), "'loop' condition must be Bool, got " + conditionType.describe());
             }
         }
@@ -1068,6 +1242,9 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
 
     if (auto* scan = dynamic_cast<ScanStmt*>(stmt)) {
         const ResolvedType iterableType = analyzeExpr(scan->iterable.get());
+        if (iterableType.isOpaqueExternal()) {
+            reportError(scan->iterable.get(), opaqueExternalValueUseMessage(iterableType, "scan iterable"));
+        }
         const ResolvedType itemType = !iterableType.params.empty() ? iterableType.params.front() : makeUnknownType();
         analysisResult.scanItemTypes[scan] = itemType;
 
@@ -1082,7 +1259,10 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
 
     if (auto* pick = dynamic_cast<PickStmt*>(stmt)) {
         const ResolvedType valueType = analyzeExpr(pick->value.get());
-        const ChoiceInfo* choiceInfo = valueType.isUnknown() ? nullptr : lookupChoice(valueType.name);
+        if (valueType.isOpaqueExternal()) {
+            reportError(pick->value.get(), opaqueExternalValueUseMessage(valueType, "pick value"));
+        }
+        const ChoiceInfo* choiceInfo = (valueType.isUnknown() || valueType.isOpaqueExternal()) ? nullptr : lookupChoice(valueType.name);
         std::unordered_set<std::string> seenTags;
 
         std::unordered_map<std::string, ResolvedType> choiceBindings;
@@ -1145,7 +1325,9 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         ResolvedType okType = makeUnknownType();
         ResolvedType failType = makeUnknownType();
 
-        if (!outcomeType.isUnknown()) {
+        if (outcomeType.isOpaqueExternal()) {
+            reportError(lift->expr.get(), opaqueExternalValueUseMessage(outcomeType, "lift operand"));
+        } else if (!outcomeType.isUnknown()) {
             if (outcomeType.name != "Outcome" || outcomeType.params.size() != 2) {
                 reportError(lift->expr.get(), "'lift' requires an Outcome value, got " + outcomeType.describe());
             } else {
@@ -1270,7 +1452,16 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr, const ResolvedType* expec
             }
         }
 
-        if (isComparison) {
+        if (leftType.isOpaqueExternal()) {
+            reportError(binary->left.get(), opaqueExternalValueUseMessage(leftType, isComparison ? "comparison operand" : "arithmetic operand"));
+        }
+        if (rightType.isOpaqueExternal()) {
+            reportError(binary->right.get(), opaqueExternalValueUseMessage(rightType, isComparison ? "comparison operand" : "arithmetic operand"));
+        }
+
+        if (leftType.isOpaqueExternal() || rightType.isOpaqueExternal()) {
+            type = makeUnknownType();
+        } else if (isComparison) {
             if (!leftType.isUnknown() && !rightType.isUnknown() &&
                 !canAssignType(rightType, leftType) && !canAssignType(leftType, rightType)) {
                 reportError(binary, "Incompatible comparison operands: " + leftType.describe() + " and " + rightType.describe());
@@ -1288,10 +1479,20 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr, const ResolvedType* expec
         const FunctionSignature* signature = nullptr;
         std::optional<MethodSignature> methodSignature;
         bool externalCall = false;
+        bool opaqueExternalCall = false;
         bool skipCalleeAnalysis = false;
+        std::string opaqueExternalCallee;
 
         if (auto* calleeIdent = dynamic_cast<IdentExpr*>(call->callee.get())) {
             signature = lookupFunctionSignature(calleeIdent->name);
+            if (!signature) {
+                const auto sym = lookupSymbol(calleeIdent->name);
+                if (sym && sym->kind == SymbolKind::Function && sym->isExternal) {
+                    externalCall = true;
+                    opaqueExternalCall = true;
+                    opaqueExternalCallee = calleeIdent->name;
+                }
+            }
         } else if (auto* member = dynamic_cast<MemberExpr*>(call->callee.get())) {
             if (auto* objectIdent = dynamic_cast<IdentExpr*>(member->object.get())) {
                 const auto sym = lookupSymbol(objectIdent->name);
@@ -1303,38 +1504,56 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr, const ResolvedType* expec
                                 signature = &*exported->second.functionSignature;
                             } else if (exported->second.kind != SymbolKind::Function) {
                                 reportError(call, "Module member is not callable: " + objectIdent->name + "." + member->member);
+                                skipCalleeAnalysis = true;
                             } else {
                                 externalCall = true;
+                                opaqueExternalCall = true;
+                                opaqueExternalCallee = describeCalleeExpr(call->callee.get());
                             }
                         } else {
-                            externalCall = true;
+                            reportError(call, "Module '" + objectIdent->name + "' does not expose callable member '" + member->member + "'.");
+                            skipCalleeAnalysis = true;
                         }
                     } else {
                         externalCall = true;
+                        opaqueExternalCall = true;
+                        opaqueExternalCallee = describeCalleeExpr(call->callee.get());
                     }
                 }
             }
 
-            if (!signature && !externalCall) {
+            if (!signature && !externalCall && !skipCalleeAnalysis) {
                 const ResolvedType receiverType = analyzeExpr(member->object.get());
-                methodSignature = lookupMethodSignature(receiverType, member->member);
-                if (methodSignature.has_value()) {
-                    signature = &methodSignature->function;
-                    if (!canPassArgumentType(member->object.get(), receiverType, methodSignature->receiverType)) {
-                        reportError(
-                            member->object.get(),
-                            "Method receiver type mismatch: expected " + methodSignature->receiverType.describe() +
-                                ", got " + receiverType.describe());
-                    }
-                } else if (!receiverType.isUnknown() && !lookupShape(receiverType.name)) {
-                    reportError(call, "Type '" + receiverType.name + "' does not provide method '" + member->member + "'.");
+                if (receiverType.isOpaqueExternal()) {
+                    reportError(member->object.get(), opaqueExternalValueUseMessage(receiverType, "method receiver"));
                     skipCalleeAnalysis = true;
+                } else {
+                    methodSignature = lookupMethodSignature(receiverType, member->member);
+                    if (methodSignature.has_value()) {
+                        signature = &methodSignature->function;
+                        if (!canPassArgumentType(member->object.get(), receiverType, methodSignature->receiverType)) {
+                            reportError(
+                                member->object.get(),
+                                "Method receiver type mismatch: expected " + methodSignature->receiverType.describe() +
+                                    ", got " + receiverType.describe());
+                        }
+                    } else if (!receiverType.isUnknown() && !lookupShape(receiverType.name)) {
+                        reportError(call, "Type '" + receiverType.name + "' does not provide method '" + member->member + "'.");
+                        skipCalleeAnalysis = true;
+                    }
                 }
             }
         }
 
-        if (!methodSignature.has_value() && !skipCalleeAnalysis) {
+        if (!methodSignature.has_value() && !skipCalleeAnalysis && !opaqueExternalCall) {
             analyzeExpr(call->callee.get());
+        }
+
+        if (opaqueExternalCall && rawDepth == 0) {
+            reportError(call->callee.get(), opaqueExternalRawRequirementMessage(call->callee.get()));
+        }
+        if (signature && signature->externalInfo.has_value() && signature->externalInfo->rawOnly && rawDepth == 0) {
+            reportError(call->callee.get(), typedExternalRawRequirementMessage(call->callee.get()));
         }
 
         if (signature) {
@@ -1354,6 +1573,10 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr, const ResolvedType* expec
             for (size_t i = 0; i < call->args.size(); ++i) {
                 const ResolvedType* paramType = i < signature->paramTypes.size() ? &signature->paramTypes[i] : nullptr;
                 const ResolvedType argType = analyzeExpr(call->args[i].get(), paramType);
+                if (argType.isOpaqueExternal()) {
+                    reportError(call->args[i].get(), opaqueExternalValueUseMessage(argType, "call argument"));
+                    continue;
+                }
                 if (rawDepth == 0 &&
                     ((paramType && isRawAddressType(*paramType)) || isRawAddressType(argType))) {
                     reportError(
@@ -1380,7 +1603,16 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr, const ResolvedType* expec
             }
 
             for (auto& arg : call->args) {
-                analyzeExpr(arg.get());
+                const ResolvedType argType = analyzeExpr(arg.get());
+                if (argType.isOpaqueExternal()) {
+                    reportError(arg.get(), opaqueExternalValueUseMessage(argType, "call argument"));
+                }
+            }
+
+            if (opaqueExternalCall) {
+                type = opaqueExternalCallee.empty()
+                    ? makeOpaqueExternalCallType(call->callee.get())
+                    : makeOpaqueExternalType(opaqueExternalCallee);
             }
         }
     } else if (auto* member = dynamic_cast<MemberExpr*>(expr)) {
@@ -1410,7 +1642,9 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr, const ResolvedType* expec
         }
 
         if (!objectType.isUnknown()) {
-            if (lookupMethodSignature(objectType, member->member).has_value()) {
+            if (objectType.isOpaqueExternal()) {
+                reportError(member->object.get(), opaqueExternalValueUseMessage(objectType, "member access"));
+            } else if (lookupMethodSignature(objectType, member->member).has_value()) {
                 type = makeUnknownType(member->member);
             } else {
                 const ShapeInfo* shape = lookupShape(objectType.name);
@@ -1512,6 +1746,10 @@ bool SemanticAnalyzer::canBorrowAsView(const ResolvedType& from, const ResolvedT
         return false;
     }
 
+    if (from.isOpaqueExternal() || to.isOpaqueExternal()) {
+        return false;
+    }
+
     if (from.isUnknown() || to.isUnknown()) {
         return true;
     }
@@ -1542,6 +1780,10 @@ bool SemanticAnalyzer::canBorrowAsView(const ResolvedType& from, const ResolvedT
 }
 
 bool SemanticAnalyzer::canPassArgumentType(Expr* expr, const ResolvedType& from, const ResolvedType& to) const {
+    if (from.isOpaqueExternal() || to.isOpaqueExternal()) {
+        return false;
+    }
+
     if (canAssignType(from, to)) {
         return true;
     }

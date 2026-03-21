@@ -1,0 +1,7 @@
+realm main
+
+import term.{status}
+
+fn main() -> Int32 {
+    give status()
+}

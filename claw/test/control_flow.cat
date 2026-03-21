@@ -19,7 +19,7 @@ fn count_down(start: Int32) -> Int32 {
 }
 
 // ─── scan iteration ──────────────────────────────────────────
-fn total(data: look Span) -> Int32 {
+fn total(data: look Span of Int32) -> Int32 {
     slot sum: Int32 = 0
     scan item over data {
         sum = sum + item
@@ -28,7 +28,7 @@ fn total(data: look Span) -> Int32 {
 }
 
 // ─── loop with stop/skip ─────────────────────────────────────
-fn find_first(data: look Span, target: Int32) -> Int32 {
+fn find_first(data: look Span of Int32, target: Int32) -> Int32 {
     slot result: Int32 = 0
     scan item over data {
         when item == target {

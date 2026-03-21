@@ -20,7 +20,9 @@ fn unwrap(signal: Signal) -> Int32 {
 }
 
 fn main() -> Int32 {
-    emit("boot")
+    raw {
+        emit("boot")
+    }
     runtime.banner()
     give add(util.answer(), 1)
 }

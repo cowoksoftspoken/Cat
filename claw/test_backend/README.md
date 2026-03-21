@@ -1,0 +1,20 @@
+# LLVM Backend Tests
+
+This folder is intentionally separate from `test/` so backend bring-up does not get mixed into the frontend corpus.
+
+Current scope:
+- direct function calls and integer arithmetic
+- branch / compare lowering
+- runtime `print` / `println` declarations and string constants
+- typed safe external scalar calls
+
+Primary runner:
+- `bash test_backend/run_backend_tests.sh`
+
+Current validation strategy:
+- emit LLVM IR with `claw emit-llvm ...`
+- assemble it with `llvm-as`
+- lower it to an object with `llc`
+- compare stable textual snapshots for the current subset
+
+This suite is meant for backend bring-up. It should stay separate from `test/` until backend coverage is broad enough that mixing both suites would not blur frontend failures with backend failures.

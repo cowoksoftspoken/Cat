@@ -32,6 +32,6 @@ fn bad_truncate_arg(bytes: edit Bytes) {
     bytes.truncate(1.5)
 }
 
-fn bad_shrink_receiver(items: look Vec) {
+fn bad_shrink_receiver(items: look Vec of Int32) {
     items.shrink_to_fit()
 }

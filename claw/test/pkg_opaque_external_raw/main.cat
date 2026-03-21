@@ -1,0 +1,8 @@
+realm main
+
+import term.{emit}
+
+fn main() -> Int32 {
+    emit("boot")
+    give 0
+}

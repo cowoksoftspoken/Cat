@@ -1,6 +1,6 @@
-lir.program entry test.drop_schedule
+lir.program entry test.drop_schedule symbol test.drop_schedule::main
 lir.realm test.drop_schedule
-lir.fn schedule_drop(flag: Int32) -> Int32
+lir.fn schedule_drop(flag: Int32 [scalar]) -> Int32 [scalar] [abi=claw link=internal symbol=test.drop_schedule::schedule_drop ffi=false]
   block entry:
     alloc stack slot message : Text
     store message <- "hello" : Text

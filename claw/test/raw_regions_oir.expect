@@ -1,0 +1,20 @@
+oir.realm test.raw_regions
+oir.fn bridge(flag: Int32 [scalar]) -> Int32 [scalar] [abi=claw link=internal symbol=test.raw_regions::bridge ffi=false]
+  block entry:
+    slot value: Int32 = 0
+    goto raw_0
+  block raw_0 [raw: raw_region_0]:
+    %t0 = gt flag, 0 : Bool
+    branch %t0 -> when_then_2, when_else_3
+  block when_then_2 [raw: raw_region_0]:
+    store value <- flag : Int32
+    goto when_join_4
+  block when_else_3 [raw: raw_region_0]:
+    store value <- 1 : Int32
+    goto when_join_4
+  block when_join_4 [raw: raw_region_0]:
+    call print(value) : Unit
+    call println("raw bridge") : Unit
+    goto raw_cont_1
+  block raw_cont_1:
+    return value : Int32

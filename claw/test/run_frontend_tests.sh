@@ -32,8 +32,13 @@ pass_cases=(
   "test/float_literals.cat"
   "test/target_size_types.cat"
   "test/method_dispatch.cat"
+  "test/lir_edges.cat"
+  "test/raw_regions.cat"
+  "test/layout_ir.cat"
   "test/pkg_demo"
   "test/pkg_rootless_demo"
+  "test/pkg_typed_external_safe"
+  "test/pkg_foreign_safe_scalar"
 )
 
 for case_file in "${pass_cases[@]}"; do
@@ -52,6 +57,18 @@ echo "[build/pass] test/pkg_rootless_demo"
 
 echo "[build/pass] test/pkg_rootless_demo/claw.toml"
 "$CLAW_EXE" build "$ROOT_DIR/test/pkg_rootless_demo/claw.toml"
+
+echo "[build/pass] test/pkg_typed_external_safe"
+"$CLAW_EXE" build "$ROOT_DIR/test/pkg_typed_external_safe"
+
+echo "[build/pass] test/pkg_typed_external_safe/claw.toml"
+"$CLAW_EXE" build "$ROOT_DIR/test/pkg_typed_external_safe/claw.toml"
+
+echo "[build/pass] test/pkg_foreign_safe_scalar"
+"$CLAW_EXE" build "$ROOT_DIR/test/pkg_foreign_safe_scalar"
+
+echo "[build/pass] test/pkg_foreign_safe_scalar/claw.toml"
+"$CLAW_EXE" build "$ROOT_DIR/test/pkg_foreign_safe_scalar/claw.toml"
 
 echo "[check/fail] test/ownership.cat"
 ownership_output=""
@@ -196,7 +213,7 @@ if [[ "$method_dispatch_output" != *"Type 'Int32' does not provide method 'len'.
    [[ "$method_dispatch_output" != *"Call argument type mismatch: expected USize, got float literal"* ]] ||
    [[ "$method_dispatch_output" != *"Call argument type mismatch: expected Byte, got float literal"* ]] ||
    [[ "$method_dispatch_output" != *"Method receiver type mismatch: expected edit Bytes, got look Bytes"* ]] ||
-   [[ "$method_dispatch_output" != *"Method receiver type mismatch: expected edit Vec, got look Vec"* ]]; then
+   [[ "$method_dispatch_output" != *"Method receiver type mismatch: expected edit Vec of Int32, got look Vec of Int32"* ]]; then
   echo "method_dispatch_diagnostics.cat did not contain the expected method diagnostics" >&2
   printf '%s
 ' "$method_dispatch_output" >&2
@@ -258,9 +275,41 @@ if type_arity_output="$($CLAW_EXE check "$ROOT_DIR/test/type_arity_diagnostics.c
 fi
 if [[ "$type_arity_output" != *"Type 'Box' expects 1 type argument(s), got 0."* ]] ||
    [[ "$type_arity_output" != *"Type 'Maybe' expects 1 type argument(s), got 2."* ]] ||
-   [[ "$type_arity_output" != *"Type 'Text' expects 0 type argument(s), got 1."* ]]; then
+   [[ "$type_arity_output" != *"Type 'Text' expects 0 type argument(s), got 1."* ]] ||
+   [[ "$type_arity_output" != *"Type 'Span' expects 1 type argument(s), got 0."* ]] ||
+   [[ "$type_arity_output" != *"Type 'Vec' expects 1 type argument(s), got 0."* ]] ||
+   [[ "$type_arity_output" != *"Type 'Table' expects 2 type argument(s), got 1."* ]]; then
   echo "type_arity_diagnostics.cat did not contain the expected arity diagnostics" >&2
   printf '%s\n' "$type_arity_output" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/layout_cycle_diagnostics.cat"
+layout_cycle_output=""
+if layout_cycle_output="$($CLAW_EXE check "$ROOT_DIR/test/layout_cycle_diagnostics.cat" 2>&1)"; then
+  echo "expected layout_cycle_diagnostics.cat to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$layout_cycle_output" != *"Owned type layout cycle requires indirection: Left -> Right -> Left."* ]] ||
+   [[ "$layout_cycle_output" != *" --> "* ]] ||
+   [[ "$layout_cycle_output" != *"left: Left"* ]]; then
+  echo "layout_cycle_diagnostics.cat did not contain the expected layout-cycle diagnostic" >&2
+  printf '%s
+' "$layout_cycle_output" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/pkg_foreign_safe_bad"
+foreign_safe_bad_output=""
+if foreign_safe_bad_output="$($CLAW_EXE check "$ROOT_DIR/test/pkg_foreign_safe_bad" 2>&1)"; then
+  echo "expected pkg_foreign_safe_bad to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$foreign_safe_bad_output" != *"safe contracts with ABI 'c' require FFI-stable parameter types, got look Text."* ]] ||
+   [[ "$foreign_safe_bad_output" != *"native.echo"* ]]; then
+  echo "pkg_foreign_safe_bad did not contain the expected foreign-ABI safety diagnostic" >&2
+  printf '%s
+' "$foreign_safe_bad_output" >&2
   exit 1
 fi
 
@@ -275,6 +324,50 @@ if [[ "$typed_import_output" != *"error[semantic]: Call argument type mismatch: 
    [[ "$typed_import_output" != *'add("oops", 1)'* ]]; then
   echo "pkg_bad_import did not contain the expected typed import diagnostic" >&2
   printf '%s\n' "$typed_import_output" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/pkg_opaque_external"
+opaque_external_output=""
+if opaque_external_output="$($CLAW_EXE check "$ROOT_DIR/test/pkg_opaque_external" 2>&1)"; then
+  echo "expected pkg_opaque_external to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$opaque_external_output" != *"Opaque external call result from 'emit' may only be used as a standalone statement, not in binding initializer for 'start'."* ]] ||
+   [[ "$opaque_external_output" != *"Opaque external call result from 'emit' may only be used as a standalone statement, not in call argument."* ]] ||
+   [[ "$opaque_external_output" != *"Opaque external call result from 'emit' may only be used as a standalone statement, not in 'when' condition."* ]] ||
+   [[ "$opaque_external_output" != *"Opaque external call result from 'emit' may only be used as a standalone statement, not in return value."* ]]; then
+  echo "pkg_opaque_external did not contain the expected opaque external diagnostics" >&2
+  printf '%s
+' "$opaque_external_output" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/pkg_opaque_external_raw"
+opaque_external_raw_output=""
+if opaque_external_raw_output="$($CLAW_EXE check "$ROOT_DIR/test/pkg_opaque_external_raw" 2>&1)"; then
+  echo "expected pkg_opaque_external_raw to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$opaque_external_raw_output" != *"Opaque external call 'emit' requires an explicit raw block or a shared typed import contract."* ]] ||
+   [[ "$opaque_external_raw_output" != *'emit("boot")'* ]]; then
+  echo "pkg_opaque_external_raw did not contain the expected raw-boundary diagnostic" >&2
+  printf '%s
+' "$opaque_external_raw_output" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/pkg_typed_external_raw"
+typed_external_raw_output=""
+if typed_external_raw_output="$("$CLAW_EXE" check "$ROOT_DIR/test/pkg_typed_external_raw" 2>&1)"; then
+  echo "expected pkg_typed_external_raw to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$typed_external_raw_output" != *"External call 'status' is declared raw-only and requires an explicit raw block."* ]] ||
+   [[ "$typed_external_raw_output" != *'give status()'* ]]; then
+  echo "pkg_typed_external_raw did not contain the expected typed raw-boundary diagnostic" >&2
+  printf '%s
+' "$typed_external_raw_output" >&2
   exit 1
 fi
 
@@ -383,6 +476,20 @@ if [[ "$oir_output" != "$expected_oir_output" ]]; then
   exit 1
 fi
 
+echo "[emit-oir] test/raw_regions.cat"
+raw_oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/raw_regions.cat" | normalize_text)"
+expected_raw_oir_output="$(cat "$ROOT_DIR/test/raw_regions_oir.expect" | normalize_text)"
+if [[ "$raw_oir_output" != "$expected_raw_oir_output" ]]; then
+  echo "raw_regions emit_oir snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s
+' "$expected_raw_oir_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s
+' "$raw_oir_output" >&2
+  exit 1
+fi
+
 echo "[emit-oir] test/drop_schedule.cat"
 drop_schedule_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/drop_schedule.cat" | normalize_text)"
 expected_drop_schedule_output="$(cat "$ROOT_DIR/test/drop_schedule_oir.expect" | normalize_text)"
@@ -395,6 +502,20 @@ if [[ "$drop_schedule_output" != "$expected_drop_schedule_output" ]]; then
   exit 1
 fi
 
+echo "[emit-oir] test/layout_ir.cat"
+layout_oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/layout_ir.cat" | normalize_text)"
+expected_layout_oir_output="$(cat "$ROOT_DIR/test/layout_oir.expect" | normalize_text)"
+if [[ "$layout_oir_output" != "$expected_layout_oir_output" ]]; then
+  echo "layout_ir emit_oir snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s
+' "$expected_layout_oir_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s
+' "$layout_oir_output" >&2
+  exit 1
+fi
+
 echo "[emit-oir] test/pkg_demo"
 package_oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/pkg_demo" | normalize_text)"
 expected_package_oir_output="$(cat "$ROOT_DIR/test/pkg_demo/emit_oir.expect" | normalize_text)"
@@ -404,6 +525,34 @@ if [[ "$package_oir_output" != "$expected_package_oir_output" ]]; then
   printf '%s\n' "$expected_package_oir_output" >&2
   echo "--- actual ---" >&2
   printf '%s\n' "$package_oir_output" >&2
+  exit 1
+fi
+
+echo "[emit-oir] test/pkg_typed_external_safe"
+typed_safe_oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/pkg_typed_external_safe" | normalize_text)"
+expected_typed_safe_oir_output="$(cat "$ROOT_DIR/test/pkg_typed_external_safe/emit_oir.expect" | normalize_text)"
+if [[ "$typed_safe_oir_output" != "$expected_typed_safe_oir_output" ]]; then
+  echo "pkg_typed_external_safe emit_oir snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s
+' "$expected_typed_safe_oir_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s
+' "$typed_safe_oir_output" >&2
+  exit 1
+fi
+
+echo "[emit-oir] test/pkg_foreign_safe_scalar"
+foreign_safe_scalar_oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/pkg_foreign_safe_scalar" | normalize_text)"
+expected_foreign_safe_scalar_oir_output="$(cat "$ROOT_DIR/test/pkg_foreign_safe_scalar/emit_oir.expect" | normalize_text)"
+if [[ "$foreign_safe_scalar_oir_output" != "$expected_foreign_safe_scalar_oir_output" ]]; then
+  echo "pkg_foreign_safe_scalar emit_oir snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s
+' "$expected_foreign_safe_scalar_oir_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s
+' "$foreign_safe_scalar_oir_output" >&2
   exit 1
 fi
 
@@ -421,6 +570,34 @@ if [[ "$lir_output" != "$expected_lir_output" ]]; then
   exit 1
 fi
 
+echo "[emit-lir] test/raw_regions.cat"
+raw_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/raw_regions.cat" | normalize_text)"
+expected_raw_lir_output="$(cat "$ROOT_DIR/test/raw_regions_lir.expect" | normalize_text)"
+if [[ "$raw_lir_output" != "$expected_raw_lir_output" ]]; then
+  echo "raw_regions emit_lir snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s
+' "$expected_raw_lir_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s
+' "$raw_lir_output" >&2
+  exit 1
+fi
+
+echo "[emit-lir] test/layout_ir.cat"
+layout_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/layout_ir.cat" | normalize_text)"
+expected_layout_lir_output="$(cat "$ROOT_DIR/test/layout_lir.expect" | normalize_text)"
+if [[ "$layout_lir_output" != "$expected_layout_lir_output" ]]; then
+  echo "layout_ir emit_lir snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s
+' "$expected_layout_lir_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s
+' "$layout_lir_output" >&2
+  exit 1
+fi
+
 echo "[emit-lir] test/drop_schedule.cat"
 drop_schedule_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/drop_schedule.cat" | normalize_text)"
 expected_drop_schedule_lir_output="$(cat "$ROOT_DIR/test/drop_schedule_lir.expect" | normalize_text)"
@@ -432,6 +609,48 @@ if [[ "$drop_schedule_lir_output" != "$expected_drop_schedule_lir_output" ]]; th
   echo "--- actual ---" >&2
   printf '%s
 ' "$drop_schedule_lir_output" >&2
+  exit 1
+fi
+
+echo "[emit-lir] test/lir_edges.cat"
+lir_edges_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/lir_edges.cat" | normalize_text)"
+expected_lir_edges_output="$(cat "$ROOT_DIR/test/lir_edges.expect" | normalize_text)"
+if [[ "$lir_edges_output" != "$expected_lir_edges_output" ]]; then
+  echo "lir_edges emit_lir snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s
+' "$expected_lir_edges_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s
+' "$lir_edges_output" >&2
+  exit 1
+fi
+
+echo "[emit-lir] test/pkg_typed_external_safe"
+typed_safe_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/pkg_typed_external_safe" | normalize_text)"
+expected_typed_safe_lir_output="$(cat "$ROOT_DIR/test/pkg_typed_external_safe/emit_lir.expect" | normalize_text)"
+if [[ "$typed_safe_lir_output" != "$expected_typed_safe_lir_output" ]]; then
+  echo "pkg_typed_external_safe emit_lir snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s
+' "$expected_typed_safe_lir_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s
+' "$typed_safe_lir_output" >&2
+  exit 1
+fi
+
+echo "[emit-lir] test/pkg_foreign_safe_scalar"
+foreign_safe_scalar_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/pkg_foreign_safe_scalar" | normalize_text)"
+expected_foreign_safe_scalar_lir_output="$(cat "$ROOT_DIR/test/pkg_foreign_safe_scalar/emit_lir.expect" | normalize_text)"
+if [[ "$foreign_safe_scalar_lir_output" != "$expected_foreign_safe_scalar_lir_output" ]]; then
+  echo "pkg_foreign_safe_scalar emit_lir snapshot mismatch" >&2
+  echo "--- expected ---" >&2
+  printf '%s
+' "$expected_foreign_safe_scalar_lir_output" >&2
+  echo "--- actual ---" >&2
+  printf '%s
+' "$foreign_safe_scalar_lir_output" >&2
   exit 1
 fi
 

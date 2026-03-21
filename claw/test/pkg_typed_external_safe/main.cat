@@ -1,0 +1,8 @@
+realm main
+
+import term.{status, bump}
+
+fn main() -> Int32 {
+    hold code: Int32 = status()
+    give bump(code)
+}

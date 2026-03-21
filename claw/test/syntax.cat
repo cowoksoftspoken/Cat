@@ -34,7 +34,7 @@ fn count_up(limit: Int32) -> Int32 {
     give i
 }
 
-fn sum_items(data: look Span) -> Int32 {
+fn sum_items(data: look Span of Int32) -> Int32 {
     slot total: Int32 = 0
     scan item over data {
         total = total + item

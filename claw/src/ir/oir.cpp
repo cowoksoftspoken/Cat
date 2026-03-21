@@ -4,6 +4,7 @@
 #include "analysis/sema.h"
 #include "ast/ast.h"
 
+#include <algorithm>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -42,6 +43,18 @@ std::string binaryOpName(const std::string& op) {
     return "op";
 }
 
+std::vector<OirRealm> canonicalizeRealmOrder(std::vector<OirRealm> realms, std::string_view entryRealm) {
+    std::stable_sort(realms.begin(), realms.end(), [&](const OirRealm& left, const OirRealm& right) {
+        const bool leftIsEntry = left.name == entryRealm;
+        const bool rightIsEntry = right.name == entryRealm;
+        if (leftIsEntry != rightIsEntry) {
+            return leftIsEntry;
+        }
+        return left.name < right.name;
+    });
+    return realms;
+}
+
 std::string exprType(const SemanticAnalyzer& sema, const Expr* expr) {
     const auto* type = sema.lookupExprType(expr);
     return type ? type->describe() : std::string("<unknown>");
@@ -76,6 +89,148 @@ std::string calleeText(const Expr* expr) {
     return "<callee>";
 }
 
+std::string tailSegment(std::string_view text) {
+    const size_t pos = text.rfind('.');
+    if (pos == std::string_view::npos) {
+        return std::string(text);
+    }
+    return std::string(text.substr(pos + 1));
+}
+
+std::string receiverSegment(std::string_view text) {
+    const size_t pos = text.rfind('.');
+    if (pos == std::string_view::npos) {
+        return {};
+    }
+    return std::string(text.substr(0, pos));
+}
+
+std::optional<OirExternalCallInfo> externalCallInfo(
+    const SemanticAnalyzer& sema,
+    const CallExpr* call,
+    std::string_view callee,
+    const std::string& type) {
+    if (!call) {
+        return std::nullopt;
+    }
+
+    if (const auto* signature = sema.lookupCallableSignature(call->callee.get())) {
+        if (signature->externalInfo.has_value()) {
+            const auto& info = *signature->externalInfo;
+            return OirExternalCallInfo{
+                info.dependencyRoot,
+                info.abi.empty() ? std::string("claw") : info.abi,
+                info.linkageName.empty() ? tailSegment(callee) : info.linkageName,
+                info.rawOnly,
+                false};
+        }
+    }
+
+    if (type.rfind("opaque external result", 0) != 0) {
+        return std::nullopt;
+    }
+
+    std::string dependencyRoot = receiverSegment(callee);
+    std::string linkageName = tailSegment(callee);
+    if (dependencyRoot.empty()) {
+        dependencyRoot = linkageName;
+    }
+    return OirExternalCallInfo{dependencyRoot, "opaque", linkageName, true, true};
+}
+
+std::string externalCallSuffix(const std::optional<OirExternalCallInfo>& info) {
+    if (!info.has_value()) {
+        return {};
+    }
+
+    std::ostringstream out;
+    out << " [extern abi=" << (info->abi.empty() ? std::string("unknown") : info->abi)
+        << " dep=" << (info->dependencyRoot.empty() ? std::string("<external>") : info->dependencyRoot)
+        << " symbol=" << (info->linkageName.empty() ? std::string("<callee>") : info->linkageName)
+        << (info->rawOnly ? " raw" : " safe");
+    if (info->opaqueResult) {
+        out << " opaque-result";
+    }
+    out << ']';
+    return out.str();
+}
+
+
+SymbolLinkInfo localLinkInfo(std::string_view realmName, std::string_view name, bool isShared) {
+    SymbolLinkInfo info;
+    info.symbol = std::string(realmName.empty() ? std::string_view("<unknown>") : realmName) + "::" + std::string(name);
+    info.abi = "claw";
+    info.linkage = isShared ? LinkageKind::Shared : LinkageKind::Internal;
+    info.ffiStable = false;
+    return info;
+}
+
+std::string formatSymbolLinkInfo(const SymbolLinkInfo& info) {
+    std::ostringstream out;
+    out << " [abi=" << (info.abi.empty() ? std::string("unknown") : info.abi)
+        << " link=" << describeLinkageKind(info.linkage)
+        << " symbol=" << (info.symbol.empty() ? std::string("<unknown>") : info.symbol)
+        << " ffi=" << (info.ffiStable ? "true" : "false") << ']';
+    return out.str();
+}
+
+std::string formatLayoutInfo(const TypeLayoutInfo& layout) {
+    std::ostringstream out;
+    out << "layout repr=" << layout.repr
+        << " kind=" << describeTypeLayoutKind(layout.kind)
+        << " size=" << layout.sizeBytes
+        << " align=" << layout.alignBytes
+        << " pass=" << describeAbiPassKind(layout.passKind)
+        << " ffi=" << (layout.ffiStable ? "true" : "false");
+    if (layout.kind == TypeLayoutKind::Tagged && !layout.isTemplate) {
+        out << " tag=" << layout.tagSizeBytes
+            << " payload_offset=" << layout.payloadOffsetBytes
+            << " payload_size=" << layout.payloadSizeBytes;
+    }
+    if (layout.isTemplate) {
+        out << " unresolved=true";
+    }
+    return out.str();
+}
+
+std::string formatParam(const OirParam& param) {
+    return param.name + ": " + param.type + " [" + describeAbiPassKind(param.passKind) + "]";
+}
+
+std::string formatTypeParams(const std::vector<std::string>& params) {
+    if (params.empty()) {
+        return {};
+    }
+
+    std::ostringstream out;
+    out << " of ";
+    for (size_t i = 0; i < params.size(); ++i) {
+        if (i > 0) {
+            out << ", ";
+        }
+        out << params[i];
+    }
+    return out.str();
+}
+
+const LayoutFieldInfo* findLayoutField(const TypeLayoutInfo& layout, std::string_view fieldName) {
+    for (const auto& field : layout.fields) {
+        if (field.name == fieldName) {
+            return &field;
+        }
+    }
+    return nullptr;
+}
+
+const LayoutVariantInfo* findLayoutVariant(const TypeLayoutInfo& layout, std::string_view variantName) {
+    for (const auto& variant : layout.variants) {
+        if (variant.name == variantName) {
+            return &variant;
+        }
+    }
+    return nullptr;
+}
+
 struct LoopTargets {
     std::string continueLabel;
     std::string breakLabel;
@@ -87,7 +242,9 @@ struct FunctionLoweringContext {
     OirFunction function;
     int nextTemp = 0;
     int nextBlock = 0;
+    int nextRawRegion = 0;
     std::vector<LoopTargets> loopStack;
+    std::vector<std::string> rawRegionStack;
 
     std::string tempName() {
         return "%t" + std::to_string(nextTemp++);
@@ -97,13 +254,21 @@ struct FunctionLoweringContext {
         return prefix + "_" + std::to_string(nextBlock++);
     }
 
+    std::string rawRegionName() {
+        return "raw_region_" + std::to_string(nextRawRegion++);
+    }
+
     size_t addBlock(const std::string& label) {
-        function.blocks.push_back(OirBlock{label, {}});
+        function.blocks.push_back(OirBlock{label, currentRawRegion(), {}});
         return function.blocks.size() - 1;
     }
 
     const LoopTargets* currentLoop() const {
         return loopStack.empty() ? nullptr : &loopStack.back();
+    }
+
+    std::optional<std::string> currentRawRegion() const {
+        return rawRegionStack.empty() ? std::nullopt : std::optional<std::string>(rawRegionStack.back());
     }
 };
 
@@ -226,13 +391,14 @@ OirValue lowerExpr(
 
         const std::string type = exprType(sema, expr);
         const std::string callee = calleeText(call->callee.get());
+        const auto callExternalInfo = externalCallInfo(sema, call, callee, type);
         if (type == "Unit") {
-            appendInst(context, blockIndex, OirCallInst{std::nullopt, callee, std::move(args), type});
+            appendInst(context, blockIndex, OirCallInst{std::nullopt, callee, std::move(args), type, callExternalInfo});
             return OirValue{"unit", "Unit", true};
         }
 
         const std::string result = context.tempName();
-        appendInst(context, blockIndex, OirCallInst{result, callee, std::move(args), type});
+        appendInst(context, blockIndex, OirCallInst{result, callee, std::move(args), type, callExternalInfo});
         return OirValue{result, type, false};
     }
 
@@ -391,8 +557,11 @@ std::optional<size_t> lowerStmt(
     if (auto* raw = dynamic_cast<const RawStmt*>(stmt)) {
         const std::string rawLabel = context.blockName("raw");
         const std::string contLabel = context.blockName("raw_cont");
+        const std::string rawRegion = context.rawRegionName();
         appendInst(context, currentBlockIndex, OirGotoInst{rawLabel});
+        context.rawRegionStack.push_back(rawRegion);
         lowerBlock(sema, ownership, raw->body.get(), rawLabel, context, contLabel, emitter);
+        context.rawRegionStack.pop_back();
         return context.addBlock(contLabel);
     }
 
@@ -522,7 +691,7 @@ std::string formatInst(const OirInst& inst, int indent) {
                 }
                 out << formatValue(value.args[i]);
             }
-            out << ") : " << value.type << "\n";
+            out << ") : " << value.type << externalCallSuffix(value.externalInfo) << "\n";
             return out.str();
         },
         [&](const OirFieldInst& value) {
@@ -549,11 +718,16 @@ std::string formatDecl(const OirDecl& decl) {
                 if (i > 0) {
                     out << ", ";
                 }
-                out << fn.params[i].name << ": " << fn.params[i].type;
+                out << formatParam(fn.params[i]);
             }
-            out << ") -> " << fn.returnType << "\n";
+            out << ") -> " << fn.returnType << " [" << describeAbiPassKind(fn.returnPassKind) << "]"
+                << formatSymbolLinkInfo(fn.linkage) << "\n";
             for (const auto& block : fn.blocks) {
-                out << "  block " << block.label << ":\n";
+                out << "  block " << block.label;
+                if (block.rawRegion.has_value()) {
+                    out << " [raw: " << *block.rawRegion << "]";
+                }
+                out << ":\n";
                 for (const auto& inst : block.insts) {
                     out << formatInst(inst, 2);
                 }
@@ -562,15 +736,31 @@ std::string formatDecl(const OirDecl& decl) {
         },
         [&](const OirShape& shape) {
             std::ostringstream out;
-            out << "oir.shape " << shape.name << "\n";
+            out << "oir.shape " << shape.name << formatTypeParams(shape.typeParams)
+                << formatSymbolLinkInfo(shape.linkage) << "\n";
+            if (shape.layout.has_value()) {
+                out << "  " << formatLayoutInfo(*shape.layout) << "\n";
+            }
             for (const auto& field : shape.fields) {
-                out << "  field " << field.name << ": " << field.type << "\n";
+                out << "  field " << field.name << ": " << field.type;
+                if (shape.layout.has_value() && !shape.layout->isTemplate) {
+                    if (const auto* layoutField = findLayoutField(*shape.layout, field.name)) {
+                        out << " @offset=" << layoutField->offsetBytes
+                            << " size=" << layoutField->sizeBytes
+                            << " align=" << layoutField->alignBytes;
+                    }
+                }
+                out << "\n";
             }
             return out.str();
         },
         [&](const OirChoice& choice) {
             std::ostringstream out;
-            out << "oir.choice " << choice.name << "\n";
+            out << "oir.choice " << choice.name << formatTypeParams(choice.typeParams)
+                << formatSymbolLinkInfo(choice.linkage) << "\n";
+            if (choice.layout.has_value()) {
+                out << "  " << formatLayoutInfo(*choice.layout) << "\n";
+            }
             for (const auto& item : choice.cases) {
                 out << "  case " << item.name;
                 if (!item.payloadTypes.empty()) {
@@ -582,6 +772,13 @@ std::string formatDecl(const OirDecl& decl) {
                         out << item.payloadTypes[i];
                     }
                     out << ")";
+                }
+                if (choice.layout.has_value() && !choice.layout->isTemplate) {
+                    if (const auto* variant = findLayoutVariant(*choice.layout, item.name)) {
+                        out << " @payload_offset=" << variant->payloadOffsetBytes
+                            << " size=" << variant->payloadSizeBytes
+                            << " align=" << variant->payloadAlignBytes;
+                    }
                 }
                 out << "\n";
             }
@@ -645,7 +842,7 @@ OirRealm OirEmitter::lowerRealm(const RealmDecl* realm) const {
     }
 
     for (const auto& decl : realm->declarations) {
-        if (auto loweredDecl = lowerDecl(decl.get())) {
+        if (auto loweredDecl = lowerDecl(decl.get(), lowered.name)) {
             lowered.decls.push_back(std::move(*loweredDecl));
         }
     }
@@ -656,40 +853,50 @@ std::string OirEmitter::emit(const RealmDecl* realm) const {
     return formatOirRealm(lowerRealm(realm));
 }
 
-std::optional<OirDecl> OirEmitter::lowerDecl(const Decl* decl) const {
+std::optional<OirDecl> OirEmitter::lowerDecl(const Decl* decl, std::string_view realmName) const {
     if (auto* fn = dynamic_cast<const FnDecl*>(decl)) {
-        return OirDecl{lowerFn(fn)};
+        return OirDecl{lowerFn(fn, realmName)};
     }
     if (auto* shape = dynamic_cast<const ShapeDecl*>(decl)) {
-        return OirDecl{lowerShape(shape)};
+        return OirDecl{lowerShape(shape, realmName)};
     }
     if (auto* choice = dynamic_cast<const ChoiceDecl*>(decl)) {
-        return OirDecl{lowerChoice(choice)};
+        return OirDecl{lowerChoice(choice, realmName)};
     }
     return std::nullopt;
 }
 
-OirFunction OirEmitter::lowerFn(const FnDecl* fn) const {
+OirFunction OirEmitter::lowerFn(const FnDecl* fn, std::string_view realmName) const {
     FunctionLoweringContext context{sema, ownership};
     context.function.name = fn ? fn->name : std::string("<unknown>");
+    context.function.linkage = localLinkInfo(realmName, context.function.name, fn && fn->isShared);
 
     const auto* signature = sema.lookupFunctionSignature(fn);
     if (fn) {
         for (size_t i = 0; i < fn->params.size(); ++i) {
+            const ResolvedType paramType = signature && i < signature->paramTypes.size()
+                ? signature->paramTypes[i]
+                : makeUnknownType();
+            const auto layout = computeTypeLayout(paramType, sema.result(), sema.targetSpec());
             context.function.params.push_back(OirParam{
                 fn->params[i].name,
-                signature && i < signature->paramTypes.size() ? signature->paramTypes[i].describe() : std::string("<unknown>")});
+                paramType.describe(),
+                layout.has_value() ? layout->passKind : AbiPassKind::Unknown});
         }
     }
-    context.function.returnType = signature ? signature->returnType.describe() : std::string("<unknown>");
+    const ResolvedType returnType = signature ? signature->returnType : makeUnknownType();
+    context.function.returnType = returnType.describe();
+    const auto returnLayout = computeTypeLayout(returnType, sema.result(), sema.targetSpec());
+    context.function.returnPassKind = returnLayout.has_value() ? returnLayout->passKind : AbiPassKind::Unknown;
 
     lowerBlock(sema, ownership, fn ? fn->body.get() : nullptr, "entry", context, {}, *this);
     return std::move(context.function);
 }
 
-OirShape OirEmitter::lowerShape(const ShapeDecl* shape) const {
+OirShape OirEmitter::lowerShape(const ShapeDecl* shape, std::string_view realmName) const {
     OirShape lowered;
     lowered.name = shape ? shape->name : std::string("<unknown>");
+    lowered.linkage = localLinkInfo(realmName, lowered.name, shape && shape->isShared);
     if (!shape) {
         return lowered;
     }
@@ -698,6 +905,12 @@ OirShape OirEmitter::lowerShape(const ShapeDecl* shape) const {
     if (!info) {
         return lowered;
     }
+
+    lowered.typeParams = info->typeParams;
+    ResolvedType namedType = makeUnknownType();
+    namedType.name = shape->name;
+    namedType.category = TypeCategory::Owned;
+    lowered.layout = computeTypeLayout(namedType, sema.result(), sema.targetSpec());
 
     for (const auto& fieldName : info->fieldOrder) {
         const auto it = info->fields.find(fieldName);
@@ -709,9 +922,10 @@ OirShape OirEmitter::lowerShape(const ShapeDecl* shape) const {
     return lowered;
 }
 
-OirChoice OirEmitter::lowerChoice(const ChoiceDecl* choice) const {
+OirChoice OirEmitter::lowerChoice(const ChoiceDecl* choice, std::string_view realmName) const {
     OirChoice lowered;
     lowered.name = choice ? choice->name : std::string("<unknown>");
+    lowered.linkage = localLinkInfo(realmName, lowered.name, choice && choice->isShared);
     if (!choice) {
         return lowered;
     }
@@ -720,6 +934,12 @@ OirChoice OirEmitter::lowerChoice(const ChoiceDecl* choice) const {
     if (!info) {
         return lowered;
     }
+
+    lowered.typeParams = info->typeParams;
+    ResolvedType namedType = makeUnknownType();
+    namedType.name = choice->name;
+    namedType.category = TypeCategory::Owned;
+    lowered.layout = computeTypeLayout(namedType, sema.result(), sema.targetSpec());
 
     for (const auto& variantName : info->variantOrder) {
         OirChoiceCase item;
@@ -746,6 +966,7 @@ bool OirEmitter::stmtDefinitelyTerminates(const Stmt* stmt) const {
 OirProgram buildOirProgram(std::string_view entryRealm, const std::vector<OirUnitView>& units) {
     OirProgram program;
     program.entryRealm = entryRealm.empty() ? std::string("<unknown>") : std::string(entryRealm);
+    program.entrySymbol = program.entryRealm + "::main";
 
     for (const auto& unit : units) {
         if (!unit.realm || !unit.sema) {
@@ -756,6 +977,7 @@ OirProgram buildOirProgram(std::string_view entryRealm, const std::vector<OirUni
         program.realms.push_back(emitter.lowerRealm(unit.realm));
     }
 
+    program.realms = canonicalizeRealmOrder(std::move(program.realms), program.entryRealm);
     return program;
 }
 
@@ -770,7 +992,8 @@ std::string formatOirRealm(const OirRealm& realm) {
 
 std::string formatOirProgram(const OirProgram& program) {
     std::ostringstream out;
-    out << "oir.program entry " << (program.entryRealm.empty() ? std::string("<unknown>") : program.entryRealm) << "\n";
+    out << "oir.program entry " << (program.entryRealm.empty() ? std::string("<unknown>") : program.entryRealm)
+        << " symbol " << (program.entrySymbol.empty() ? std::string("<unknown>::main") : program.entrySymbol) << "\n";
     for (size_t i = 0; i < program.realms.size(); ++i) {
         if (i > 0) {
             out << "\n";

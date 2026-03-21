@@ -41,7 +41,7 @@ fn clear_bytes(bytes: edit Bytes) {
     bytes.clear()
 }
 
-fn clear_vec(items: edit Vec) -> USize {
+fn clear_vec(items: edit Vec of Int32) -> USize {
     items.reserve(32)
     when items.has_capacity(4) {
         items.truncate(4)
@@ -51,19 +51,19 @@ fn clear_vec(items: edit Vec) -> USize {
     give items.capacity()
 }
 
-fn tune_table(table: edit Table) {
+fn tune_table(table: edit Table of Text, Int32) {
     table.reserve(16)
     table.shrink_to_fit()
     table.clear()
 }
 
-fn tune_set(items: edit Set) -> Bool {
+fn tune_set(items: edit Set of Int32) -> Bool {
     items.reserve(8)
     items.shrink_to_fit()
     give items.has_capacity(4)
 }
 
-fn tune_ring(items: edit Ring) -> USize {
+fn tune_ring(items: edit Ring of Int32) -> USize {
     items.reserve(12)
     items.truncate(6)
     items.shrink_to_fit()

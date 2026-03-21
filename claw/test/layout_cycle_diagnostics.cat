@@ -1,0 +1,9 @@
+realm test.layout_cycle
+
+shape Left {
+    right: Right
+}
+
+shape Right {
+    left: Left
+}

@@ -21,12 +21,24 @@ struct LoadedUnit {
     std::vector<ImportedBinding> importedBindings;
 };
 
+struct DependencyFunctionContract {
+    std::string declaration;
+    bool rawOnly = true;
+};
+
+struct DependencySpec {
+    std::string version;
+    std::string abi = "claw";
+    std::unordered_map<std::string, DependencyFunctionContract> functions;
+};
+
 struct ProjectConfig {
     std::filesystem::path path;
     std::string name;
     std::string version;
     std::string edition;
     std::unordered_map<std::string, std::string> dependencies;
+    std::unordered_map<std::string, DependencySpec> dependencySpecs;
 };
 
 struct LoadedProject {

@@ -1,0 +1,8 @@
+oir.program entry main symbol main::main
+oir.realm main
+oir.fn main() -> Int32 [scalar] [abi=claw link=internal symbol=main::main ffi=false]
+  block entry:
+    %t0 = call status() : Int32 [extern abi=claw dep=term symbol=status safe]
+    hold code: Int32 = %t0
+    %t1 = call bump(code) : Int32 [extern abi=claw dep=term symbol=bump safe]
+    return %t1 : Int32

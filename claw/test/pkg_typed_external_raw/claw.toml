@@ -1,0 +1,7 @@
+[project]
+name = "TYPEDRAW"
+version = "0.1.0"
+edition = "2025"
+
+[dependencies]
+term = { version = "1.0.0", abi = "claw", status = "raw fn status() -> Int32 {}" }

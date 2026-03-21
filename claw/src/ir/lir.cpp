@@ -1,6 +1,7 @@
 #include "ir/lir.h"
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
@@ -37,6 +38,133 @@ std::string tailSegment(std::string_view text) {
         return std::string(text);
     }
     return std::string(text.substr(pos + 1));
+}
+
+std::string receiverSegment(std::string_view text) {
+    const size_t pos = text.rfind('.');
+    if (pos == std::string_view::npos) {
+        return {};
+    }
+    return std::string(text.substr(0, pos));
+}
+
+bool isOpaqueExternalType(std::string_view type);
+
+std::string sanitizeHookSegment(std::string_view text) {
+    std::string sanitized;
+    sanitized.reserve(text.size());
+    for (const char c : text) {
+        if (std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_') {
+            sanitized.push_back(c);
+        } else {
+            sanitized.push_back('_');
+        }
+    }
+    if (sanitized.empty()) {
+        return "unknown";
+    }
+    return sanitized;
+}
+
+std::optional<LirExternalCallInfo> lowerExternalInfo(const OirCallInst& call) {
+    if (call.externalInfo.has_value()) {
+        const auto& info = *call.externalInfo;
+        return LirExternalCallInfo{info.dependencyRoot, info.abi, info.linkageName, info.rawOnly, info.opaqueResult};
+    }
+
+    if (!isOpaqueExternalType(call.type)) {
+        return std::nullopt;
+    }
+
+    std::string dependencyRoot = receiverSegment(call.callee);
+    std::string linkageName = tailSegment(call.callee);
+    if (dependencyRoot.empty()) {
+        dependencyRoot = linkageName;
+    }
+    return LirExternalCallInfo{dependencyRoot, "opaque", linkageName, true, true};
+}
+
+std::string externalInfoSuffix(const std::optional<LirExternalCallInfo>& info) {
+    if (!info.has_value()) {
+        return {};
+    }
+
+    std::ostringstream out;
+    out << " [abi=" << (info->abi.empty() ? std::string("unknown") : info->abi)
+        << " dep=" << (info->dependencyRoot.empty() ? std::string("<external>") : info->dependencyRoot)
+        << " symbol=" << (info->linkageName.empty() ? std::string("<callee>") : info->linkageName)
+        << (info->rawOnly ? " raw" : " safe");
+    if (info->opaqueResult) {
+        out << " opaque-result";
+    }
+    out << ']';
+    return out.str();
+}
+
+std::string formatSymbolLinkInfo(const SymbolLinkInfo& info) {
+    std::ostringstream out;
+    out << " [abi=" << (info.abi.empty() ? std::string("unknown") : info.abi)
+        << " link=" << describeLinkageKind(info.linkage)
+        << " symbol=" << (info.symbol.empty() ? std::string("<unknown>") : info.symbol)
+        << " ffi=" << (info.ffiStable ? "true" : "false") << ']';
+    return out.str();
+}
+
+std::string formatTypeParams(const std::vector<std::string>& params) {
+    if (params.empty()) {
+        return {};
+    }
+
+    std::ostringstream out;
+    out << " of ";
+    for (size_t i = 0; i < params.size(); ++i) {
+        if (i > 0) {
+            out << ", ";
+        }
+        out << params[i];
+    }
+    return out.str();
+}
+
+std::string formatLayoutInfo(const TypeLayoutInfo& layout) {
+    std::ostringstream out;
+    out << "layout repr=" << layout.repr
+        << " kind=" << describeTypeLayoutKind(layout.kind)
+        << " size=" << layout.sizeBytes
+        << " align=" << layout.alignBytes
+        << " pass=" << describeAbiPassKind(layout.passKind)
+        << " ffi=" << (layout.ffiStable ? "true" : "false");
+    if (layout.kind == TypeLayoutKind::Tagged && !layout.isTemplate) {
+        out << " tag=" << layout.tagSizeBytes
+            << " payload_offset=" << layout.payloadOffsetBytes
+            << " payload_size=" << layout.payloadSizeBytes;
+    }
+    if (layout.isTemplate) {
+        out << " unresolved=true";
+    }
+    return out.str();
+}
+
+std::string formatParam(const LirParam& param) {
+    return param.name + ": " + param.type + " [" + describeAbiPassKind(param.passKind) + "]";
+}
+
+const LayoutFieldInfo* findLayoutField(const TypeLayoutInfo& layout, std::string_view fieldName) {
+    for (const auto& field : layout.fields) {
+        if (field.name == fieldName) {
+            return &field;
+        }
+    }
+    return nullptr;
+}
+
+const LayoutVariantInfo* findLayoutVariant(const TypeLayoutInfo& layout, std::string_view variantName) {
+    for (const auto& variant : layout.variants) {
+        if (variant.name == variantName) {
+            return &variant;
+        }
+    }
+    return nullptr;
 }
 
 bool isRuntimeCall(std::string_view callee) {
@@ -78,6 +206,10 @@ bool requiresBoundsCheck(std::string_view name) {
     return methods.contains(std::string(name));
 }
 
+bool isOpaqueExternalType(std::string_view type) {
+    return type.starts_with("opaque external result");
+}
+
 LirCallKind classifyCallKind(const OirCallInst& call, const std::unordered_set<std::string>& knownFunctions) {
     if (isRuntimeCall(call.callee)) {
         return LirCallKind::Runtime;
@@ -86,6 +218,10 @@ LirCallKind classifyCallKind(const OirCallInst& call, const std::unordered_set<s
     const std::string tail = tailSegment(call.callee);
     if (call.callee.find('.') != std::string::npos && isKnownBuiltinMethod(tail)) {
         return LirCallKind::Builtin;
+    }
+
+    if (call.externalInfo.has_value() || isOpaqueExternalType(call.type)) {
+        return LirCallKind::External;
     }
 
     if (knownFunctions.contains(call.callee)) {
@@ -108,6 +244,16 @@ LirSafetyTag classifyCallSafety(const OirCallInst& call) {
         return LirSafetyTag::ProvenSafe;
     }
 
+    if (call.externalInfo.has_value()) {
+        return (call.externalInfo->rawOnly || call.externalInfo->opaqueResult)
+            ? LirSafetyTag::UnsafeBoundary
+            : LirSafetyTag::ProvenSafe;
+    }
+
+    if (isOpaqueExternalType(call.type) || call.type == "<unknown>") {
+        return LirSafetyTag::UnsafeBoundary;
+    }
+
     const std::string tail = tailSegment(call.callee);
     if (!isKnownBuiltinMethod(tail)) {
         return LirSafetyTag::None;
@@ -122,8 +268,17 @@ std::string classifyHook(const OirCallInst& call, LirCallKind kind) {
         return std::string("runtime.") + tail;
     case LirCallKind::Builtin:
         return std::string("builtin.") + tail;
+    case LirCallKind::External: {
+        const auto info = lowerExternalInfo(call);
+        const std::string abi = sanitizeHookSegment(info && !info->abi.empty() ? info->abi : std::string("unknown"));
+        const std::string dependencyRoot = sanitizeHookSegment(
+            info && !info->dependencyRoot.empty() ? info->dependencyRoot : tail);
+        const std::string linkageName = sanitizeHookSegment(
+            info && !info->linkageName.empty() ? info->linkageName : tail);
+        return std::string("external.") + abi + "." + dependencyRoot + "." + linkageName;
+    }
     case LirCallKind::Foreign:
-        return std::string("foreign.") + call.callee;
+        return std::string("foreign.") + sanitizeHookSegment(call.callee);
     case LirCallKind::Direct:
     case LirCallKind::ModuleDirect:
         return {};
@@ -141,6 +296,8 @@ std::string callKindName(LirCallKind kind) {
         return "runtime";
     case LirCallKind::Builtin:
         return "builtin";
+    case LirCallKind::External:
+        return "external";
     case LirCallKind::Foreign:
         return "foreign";
     }
@@ -155,6 +312,8 @@ std::string safetySuffix(LirSafetyTag tag) {
         return " [proven-safe]";
     case LirSafetyTag::BoundsCheckRequired:
         return " [bounds-check]";
+    case LirSafetyTag::UnsafeBoundary:
+        return " [unsafe-boundary]";
     }
     return {};
 }
@@ -201,7 +360,13 @@ void populatePredecessors(LirFunction& function) {
                     }
                     addEdge(predecessors, value.defectLabel, block.label);
                 },
+                [&](const LirBoundsCheckInst& value) {
+                    addEdge(predecessors, value.failLabel, block.label);
+                },
                 [&](const LirLiftInst& value) {
+                    if (!value.successLabel.empty()) {
+                        addEdge(predecessors, value.successLabel, block.label);
+                    }
                     addEdge(predecessors, value.failLabel, block.label);
                 },
                 [&](const LirBreakInst& value) {
@@ -239,31 +404,38 @@ LirFunction lowerFunction(const OirFunction& fn, const std::unordered_set<std::s
     LirFunction lowered;
     lowered.name = fn.name;
     lowered.returnType = fn.returnType;
+    lowered.returnPassKind = fn.returnPassKind;
+    lowered.linkage = fn.linkage;
     lowered.params.reserve(fn.params.size());
     for (const auto& param : fn.params) {
-        lowered.params.push_back(LirParam{param.name, param.type});
+        lowered.params.push_back(LirParam{param.name, param.type, param.passKind});
     }
 
     int nextDefect = 0;
+    int nextLift = 0;
     std::vector<LirBlock> defectBlocks;
     lowered.blocks.reserve(fn.blocks.size());
 
     for (const auto& block : fn.blocks) {
-        LirBlock loweredBlock;
-        loweredBlock.label = block.label;
-        for (const auto& inst : block.insts) {
+        LirBlock currentBlock;
+        currentBlock.label = block.label;
+        currentBlock.rawRegion = block.rawRegion;
+
+        for (size_t instIndex = 0; instIndex < block.insts.size(); ++instIndex) {
+            const bool hasTrailingInsts = instIndex + 1 < block.insts.size();
+            const auto& inst = block.insts[instIndex];
             std::visit(Overloaded{
                 [&](const OirHoldInst& value) {
-                    loweredBlock.insts.push_back(LirObjectInst{value.isMutable, value.name, value.type, "stack"});
+                    currentBlock.insts.push_back(LirObjectInst{value.isMutable, value.name, value.type, "stack"});
                     if (value.init.has_value()) {
-                        loweredBlock.insts.push_back(LirStoreInst{value.name, lowerValue(*value.init)});
+                        currentBlock.insts.push_back(LirStoreInst{value.name, lowerValue(*value.init)});
                     }
                 },
                 [&](const OirStoreInst& value) {
-                    loweredBlock.insts.push_back(LirStoreInst{value.target, lowerValue(value.value)});
+                    currentBlock.insts.push_back(LirStoreInst{value.target, lowerValue(value.value)});
                 },
                 [&](const OirStoreFieldInst& value) {
-                    loweredBlock.insts.push_back(LirStoreFieldInst{
+                    currentBlock.insts.push_back(LirStoreFieldInst{
                         lowerValue(value.object),
                         value.field,
                         lowerValue(value.value),
@@ -271,22 +443,22 @@ LirFunction lowerFunction(const OirFunction& fn, const std::unordered_set<std::s
                     });
                 },
                 [&](const OirReturnInst& value) {
-                    loweredBlock.insts.push_back(LirReturnInst{lowerValue(value.value)});
+                    currentBlock.insts.push_back(LirReturnInst{lowerValue(value.value)});
                 },
                 [&](const OirDiscardInst& value) {
-                    loweredBlock.insts.push_back(LirDiscardInst{lowerValue(value.value)});
+                    currentBlock.insts.push_back(LirDiscardInst{lowerValue(value.value)});
                 },
                 [&](const OirDropInst& value) {
-                    loweredBlock.insts.push_back(LirDropInst{value.name, value.type});
+                    currentBlock.insts.push_back(LirDropInst{value.name, value.type});
                 },
                 [&](const OirBranchInst& value) {
-                    loweredBlock.insts.push_back(LirBranchInst{lowerValue(value.condition), value.trueLabel, value.falseLabel});
+                    currentBlock.insts.push_back(LirBranchInst{lowerValue(value.condition), value.trueLabel, value.falseLabel});
                 },
                 [&](const OirGotoInst& value) {
-                    loweredBlock.insts.push_back(LirGotoInst{value.targetLabel});
+                    currentBlock.insts.push_back(LirGotoInst{value.targetLabel});
                 },
                 [&](const OirScanInst& value) {
-                    loweredBlock.insts.push_back(LirIterNextInst{value.itemName, value.itemType, lowerValue(value.iterable), value.bodyLabel, value.exitLabel});
+                    currentBlock.insts.push_back(LirIterNextInst{value.itemName, value.itemType, lowerValue(value.iterable), value.bodyLabel, value.exitLabel});
                 },
                 [&](const OirPickInst& value) {
                     LirSwitchInst loweredSwitch;
@@ -294,9 +466,9 @@ LirFunction lowerFunction(const OirFunction& fn, const std::unordered_set<std::s
                     for (const auto& item : value.cases) {
                         loweredSwitch.cases.push_back(LirSwitchCase{item.tag, item.bindings, item.targetLabel});
                     }
-                    const std::string defectLabel = block.label + ".defect.pick." + std::to_string(nextDefect++);
+                    const std::string defectLabel = currentBlock.label + ".defect.pick." + std::to_string(nextDefect++);
                     loweredSwitch.defectLabel = defectLabel;
-                    loweredBlock.insts.push_back(std::move(loweredSwitch));
+                    currentBlock.insts.push_back(std::move(loweredSwitch));
 
                     LirBlock defectBlock;
                     defectBlock.label = defectLabel;
@@ -304,42 +476,73 @@ LirFunction lowerFunction(const OirFunction& fn, const std::unordered_set<std::s
                     defectBlocks.push_back(std::move(defectBlock));
                 },
                 [&](const OirLiftInst& value) {
-                    loweredBlock.insts.push_back(LirLiftInst{lowerValue(value.value), value.okName, value.failLabel});
+                    std::string successLabel;
+                    if (hasTrailingInsts) {
+                        successLabel = currentBlock.label + ".lift_ok." + std::to_string(nextLift++);
+                    }
+                    currentBlock.insts.push_back(LirLiftInst{lowerValue(value.value), value.okName, successLabel, value.failLabel});
+                    if (!successLabel.empty()) {
+                        lowered.blocks.push_back(std::move(currentBlock));
+                        currentBlock = LirBlock{};
+                        currentBlock.label = successLabel;
+                        currentBlock.rawRegion = block.rawRegion;
+                    }
                 },
                 [&](const OirStopInst& value) {
-                    loweredBlock.insts.push_back(LirBreakInst{value.targetLabel.empty() ? std::string("<unresolved-break>") : value.targetLabel});
+                    currentBlock.insts.push_back(LirBreakInst{value.targetLabel.empty() ? std::string("<unresolved-break>") : value.targetLabel});
                 },
                 [&](const OirSkipInst& value) {
-                    loweredBlock.insts.push_back(LirContinueInst{value.targetLabel.empty() ? std::string("<unresolved-continue>") : value.targetLabel});
+                    currentBlock.insts.push_back(LirContinueInst{value.targetLabel.empty() ? std::string("<unresolved-continue>") : value.targetLabel});
                 },
                 [&](const OirCallInst& value) {
                     const LirCallKind kind = classifyCallKind(value, knownFunctions);
-                    loweredBlock.insts.push_back(LirCallInst{
+                    std::vector<LirValue> args;
+                    args.reserve(value.args.size());
+                    for (const auto& arg : value.args) {
+                        args.push_back(lowerValue(arg));
+                    }
+
+                    LirSafetyTag safety = classifyCallSafety(value);
+                    if (safety == LirSafetyTag::BoundsCheckRequired) {
+                        const std::string defectLabel = currentBlock.label + ".defect.bounds." + std::to_string(nextDefect++);
+                        currentBlock.insts.push_back(LirBoundsCheckInst{
+                            tailSegment(value.callee),
+                            [&]() {
+                                const std::string receiver = receiverSegment(value.callee);
+                                return receiver.empty() ? std::string("<receiver>") : receiver;
+                            }(),
+                            args,
+                            defectLabel,
+                        });
+
+                        LirBlock defectBlock;
+                        defectBlock.label = defectLabel;
+                        defectBlock.insts.push_back(LirDefectInst{"bounds", tailSegment(value.callee) + " requires in-range access"});
+                        defectBlocks.push_back(std::move(defectBlock));
+                        safety = LirSafetyTag::ProvenSafe;
+                    }
+
+                    currentBlock.insts.push_back(LirCallInst{
                         value.result,
                         value.callee,
-                        [&]() {
-                            std::vector<LirValue> args;
-                            args.reserve(value.args.size());
-                            for (const auto& arg : value.args) {
-                                args.push_back(lowerValue(arg));
-                            }
-                            return args;
-                        }(),
+                        std::move(args),
                         value.type,
                         kind,
-                        classifyCallSafety(value),
+                        safety,
                         classifyHook(value, kind),
+                        lowerExternalInfo(value),
                     });
                 },
                 [&](const OirFieldInst& value) {
-                    loweredBlock.insts.push_back(LirFieldInst{value.result, lowerValue(value.object), value.field, value.type, LirSafetyTag::ProvenSafe});
+                    currentBlock.insts.push_back(LirFieldInst{value.result, lowerValue(value.object), value.field, value.type, LirSafetyTag::ProvenSafe});
                 },
                 [&](const OirBinaryInst& value) {
-                    loweredBlock.insts.push_back(LirBinaryInst{value.result, value.op, lowerValue(value.left), lowerValue(value.right), value.type});
+                    currentBlock.insts.push_back(LirBinaryInst{value.result, value.op, lowerValue(value.left), lowerValue(value.right), value.type});
                 }
             }, inst);
         }
-        lowered.blocks.push_back(std::move(loweredBlock));
+
+        lowered.blocks.push_back(std::move(currentBlock));
     }
 
     for (auto& defect : defectBlocks) {
@@ -381,6 +584,18 @@ std::string formatInst(const LirInst& inst, int indent) {
                 out << value.inputs[i].label << ": " << formatValue(value.inputs[i].value);
             }
             out << "]\n";
+            return out.str();
+        },
+        [&](const LirBoundsCheckInst& value) {
+            std::ostringstream out;
+            out << pad << "bounds_check " << value.kind << ' ' << value.subject << '(';
+            for (size_t i = 0; i < value.args.size(); ++i) {
+                if (i > 0) {
+                    out << ", ";
+                }
+                out << formatValue(value.args[i]);
+            }
+            out << ") fail -> " << value.failLabel << "\n";
             return out.str();
         },
         [&](const LirStoreInst& value) {
@@ -447,8 +662,11 @@ std::string formatInst(const LirInst& inst, int indent) {
         },
         [&](const LirLiftInst& value) {
             std::ostringstream out;
-            out << pad << "lift " << formatValue(value.value) << " -> " << value.okName << ", fail "
-                << value.failLabel << "\n";
+            out << pad << "lift " << formatValue(value.value) << " -> " << value.okName;
+            if (!value.successLabel.empty()) {
+                out << ", success " << value.successLabel;
+            }
+            out << ", fail " << value.failLabel << "\n";
             return out.str();
         },
         [&](const LirBreakInst& value) {
@@ -475,7 +693,7 @@ std::string formatInst(const LirInst& inst, int indent) {
             if (!value.hook.empty()) {
                 out << " hook " << value.hook;
             }
-            out << safetySuffix(value.safety) << "\n";
+            out << externalInfoSuffix(value.externalInfo) << safetySuffix(value.safety) << "\n";
             return out.str();
         },
         [&](const LirFieldInst& value) {
@@ -511,11 +729,15 @@ std::string formatDecl(const LirDecl& decl) {
                 if (i > 0) {
                     out << ", ";
                 }
-                out << fn.params[i].name << ": " << fn.params[i].type;
+                out << formatParam(fn.params[i]);
             }
-            out << ") -> " << fn.returnType << "\n";
+            out << ") -> " << fn.returnType << " [" << describeAbiPassKind(fn.returnPassKind) << "]"
+                << formatSymbolLinkInfo(fn.linkage) << "\n";
             for (const auto& block : fn.blocks) {
                 out << "  block " << block.label;
+                if (block.rawRegion.has_value()) {
+                    out << " [raw: " << *block.rawRegion << "]";
+                }
                 if (!block.predecessors.empty()) {
                     out << " [preds: ";
                     for (size_t i = 0; i < block.predecessors.size(); ++i) {
@@ -535,15 +757,31 @@ std::string formatDecl(const LirDecl& decl) {
         },
         [&](const LirShape& shape) {
             std::ostringstream out;
-            out << "lir.shape " << shape.name << "\n";
+            out << "lir.shape " << shape.name << formatTypeParams(shape.typeParams)
+                << formatSymbolLinkInfo(shape.linkage) << "\n";
+            if (shape.layout.has_value()) {
+                out << "  " << formatLayoutInfo(*shape.layout) << "\n";
+            }
             for (const auto& field : shape.fields) {
-                out << "  field " << field.name << ": " << field.type << "\n";
+                out << "  field " << field.name << ": " << field.type;
+                if (shape.layout.has_value() && !shape.layout->isTemplate) {
+                    if (const auto* layoutField = findLayoutField(*shape.layout, field.name)) {
+                        out << " @offset=" << layoutField->offsetBytes
+                            << " size=" << layoutField->sizeBytes
+                            << " align=" << layoutField->alignBytes;
+                    }
+                }
+                out << "\n";
             }
             return out.str();
         },
         [&](const LirChoice& choice) {
             std::ostringstream out;
-            out << "lir.choice " << choice.name << "\n";
+            out << "lir.choice " << choice.name << formatTypeParams(choice.typeParams)
+                << formatSymbolLinkInfo(choice.linkage) << "\n";
+            if (choice.layout.has_value()) {
+                out << "  " << formatLayoutInfo(*choice.layout) << "\n";
+            }
             for (const auto& item : choice.cases) {
                 out << "  case " << item.name;
                 if (!item.payloadTypes.empty()) {
@@ -555,6 +793,13 @@ std::string formatDecl(const LirDecl& decl) {
                         out << item.payloadTypes[i];
                     }
                     out << ')';
+                }
+                if (choice.layout.has_value() && !choice.layout->isTemplate) {
+                    if (const auto* variant = findLayoutVariant(*choice.layout, item.name)) {
+                        out << " @payload_offset=" << variant->payloadOffsetBytes
+                            << " size=" << variant->payloadSizeBytes
+                            << " align=" << variant->payloadAlignBytes;
+                    }
                 }
                 out << "\n";
             }
@@ -568,6 +813,7 @@ std::string formatDecl(const LirDecl& decl) {
 LirProgram buildLirProgram(const OirProgram& program) {
     LirProgram lowered;
     lowered.entryRealm = program.entryRealm;
+    lowered.entrySymbol = program.entrySymbol;
 
     const auto knownFunctions = collectKnownFunctions(program);
     lowered.realms.reserve(program.realms.size());
@@ -583,6 +829,9 @@ LirProgram buildLirProgram(const OirProgram& program) {
                 [&](const OirShape& shape) {
                     LirShape loweredShape;
                     loweredShape.name = shape.name;
+                    loweredShape.typeParams = shape.typeParams;
+                    loweredShape.linkage = shape.linkage;
+                    loweredShape.layout = shape.layout;
                     loweredShape.fields.reserve(shape.fields.size());
                     for (const auto& field : shape.fields) {
                         loweredShape.fields.push_back(LirShapeField{field.name, field.type});
@@ -592,6 +841,9 @@ LirProgram buildLirProgram(const OirProgram& program) {
                 [&](const OirChoice& choice) {
                     LirChoice loweredChoice;
                     loweredChoice.name = choice.name;
+                    loweredChoice.typeParams = choice.typeParams;
+                    loweredChoice.linkage = choice.linkage;
+                    loweredChoice.layout = choice.layout;
                     loweredChoice.cases.reserve(choice.cases.size());
                     for (const auto& item : choice.cases) {
                         loweredChoice.cases.push_back(LirChoiceCase{item.name, item.payloadTypes});
@@ -621,7 +873,8 @@ std::string formatLirRealm(const LirRealm& realm) {
 
 std::string formatLirProgram(const LirProgram& program) {
     std::ostringstream out;
-    out << "lir.program entry " << (program.entryRealm.empty() ? std::string("<unknown>") : program.entryRealm) << "\n";
+    out << "lir.program entry " << (program.entryRealm.empty() ? std::string("<unknown>") : program.entryRealm)
+        << " symbol " << (program.entrySymbol.empty() ? std::string("<unknown>::main") : program.entrySymbol) << "\n";
     for (size_t i = 0; i < program.realms.size(); ++i) {
         if (i > 0) {
             out << "\n";

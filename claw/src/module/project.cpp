@@ -123,6 +123,180 @@ void attachDiagnosticPath(std::vector<Diagnostic>* diagnostics, const std::files
     }
 }
 
+bool containsRawAddressType(const ResolvedType& type) {
+    if (type.name == "Addr" || type.name == "RawPtr" || type.name == "RawMut") {
+        return true;
+    }
+    for (const auto& param : type.params) {
+        if (containsRawAddressType(param)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool requiresFfiStableBoundary(const DependencySpec& dependency, const DependencyFunctionContract& contract) {
+    return !contract.rawOnly && !dependency.abi.empty() && dependency.abi != "claw";
+}
+
+std::optional<TypeLayoutInfo> computeExternalBoundaryLayout(const ResolvedType& type) {
+    static const AnalysisResult emptyAnalysis;
+    static const TargetSpec target = defaultTargetSpec();
+    return computeTypeLayout(type, emptyAnalysis, target);
+}
+
+bool isFfiStableBoundaryType(const ResolvedType& type) {
+    const auto layout = computeExternalBoundaryLayout(type);
+    return layout.has_value() && layout->ffiStable;
+}
+
+void pushContractDiagnostic(
+    std::vector<Diagnostic>* diagnostics,
+    const std::filesystem::path& path,
+    const std::string& dependencyRoot,
+    const std::string& itemName,
+    const std::string& message) {
+    diagnostics->push_back(Diagnostic{
+        "config",
+        "Dependency contract '" + dependencyRoot + "." + itemName + "': " + message,
+        {},
+        path.string()});
+}
+
+
+bool canSourceViewReturnFromParam(const ResolvedType& returnType, const ResolvedType& paramType) {
+    if (!returnType.isView() || !paramType.isView()) {
+        return false;
+    }
+    if (returnType.name != paramType.name || returnType.params.size() != paramType.params.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < returnType.params.size(); ++i) {
+        if (!sameType(returnType.params[i], paramType.params[i])) {
+            return false;
+        }
+    }
+    if (returnType.viewKind == paramType.viewKind) {
+        return true;
+    }
+    return returnType.viewKind == "look" && paramType.viewKind == "edit";
+}
+
+std::optional<FunctionSignature> parseDependencyFunctionSignature(
+    const std::filesystem::path& configPath,
+    const std::string& dependencyRoot,
+    const std::string& itemName,
+    const DependencySpec& dependency,
+    const DependencyFunctionContract& contract,
+    std::vector<Diagnostic>* diagnostics) {
+    try {
+        Lexer lexer(contract.declaration);
+        Parser parser(lexer.tokenize());
+        auto realm = parser.parseFile();
+        if (!realm || realm->declarations.size() != 1) {
+            pushContractDiagnostic(diagnostics, configPath, dependencyRoot, itemName, "must contain exactly one function declaration.");
+            return std::nullopt;
+        }
+
+        auto* fn = dynamic_cast<FnDecl*>(realm->declarations.front().get());
+        if (!fn) {
+            pushContractDiagnostic(diagnostics, configPath, dependencyRoot, itemName, "must declare a function.");
+            return std::nullopt;
+        }
+        if (fn->name != itemName) {
+            pushContractDiagnostic(diagnostics, configPath, dependencyRoot, itemName, "function name must match the imported item name.");
+            return std::nullopt;
+        }
+
+        TypeCatalog catalog;
+        std::vector<Diagnostic> typeDiagnostics;
+        FunctionSignature signature;
+        signature.isExternal = true;
+        signature.externalInfo = ExternalCallableInfo{dependencyRoot, dependency.abi.empty() ? std::string("claw") : dependency.abi, fn->name, contract.rawOnly};
+
+        for (const auto& param : fn->params) {
+            signature.paramTypes.push_back(catalog.resolveType(param.type.get(), {}, &typeDiagnostics));
+        }
+        signature.returnType = fn->returnType
+            ? catalog.resolveType(fn->returnType.get(), {}, &typeDiagnostics)
+            : makePlainResolvedType("Unit");
+
+        if (!contract.rawOnly) {
+            for (const auto& paramType : signature.paramTypes) {
+                if (containsRawAddressType(paramType)) {
+                    pushContractDiagnostic(diagnostics, configPath, dependencyRoot, itemName, "safe contracts may not expose raw address types in parameters.");
+                    return std::nullopt;
+                }
+            }
+            if (containsRawAddressType(signature.returnType)) {
+                pushContractDiagnostic(diagnostics, configPath, dependencyRoot, itemName, "safe contracts may not expose raw address types in returns.");
+                return std::nullopt;
+            }
+            if (signature.returnType.viewKind == "edit") {
+                pushContractDiagnostic(diagnostics, configPath, dependencyRoot, itemName, "safe contracts may not return edit views.");
+                return std::nullopt;
+            }
+            if (requiresFfiStableBoundary(dependency, contract)) {
+                for (const auto& paramType : signature.paramTypes) {
+                    if (!isFfiStableBoundaryType(paramType)) {
+                        pushContractDiagnostic(
+                            diagnostics,
+                            configPath,
+                            dependencyRoot,
+                            itemName,
+                            "safe contracts with ABI '" + dependency.abi + "' require FFI-stable parameter types, got " +
+                                paramType.describe() + ".");
+                        return std::nullopt;
+                    }
+                }
+                if (!isFfiStableBoundaryType(signature.returnType)) {
+                    pushContractDiagnostic(
+                        diagnostics,
+                        configPath,
+                        dependencyRoot,
+                        itemName,
+                        "safe contracts with ABI '" + dependency.abi + "' require an FFI-stable return type, got " +
+                            signature.returnType.describe() + ".");
+                    return std::nullopt;
+                }
+            }
+        }
+
+        if (signature.returnType.isView()) {
+            std::optional<size_t> sourceParam;
+            for (size_t i = 0; i < signature.paramTypes.size(); ++i) {
+                if (!canSourceViewReturnFromParam(signature.returnType, signature.paramTypes[i])) {
+                    continue;
+                }
+                if (sourceParam.has_value()) {
+                    pushContractDiagnostic(diagnostics, configPath, dependencyRoot, itemName, "view-returning contracts must match exactly one view parameter source.");
+                    return std::nullopt;
+                }
+                sourceParam = i;
+            }
+            if (!sourceParam.has_value()) {
+                pushContractDiagnostic(diagnostics, configPath, dependencyRoot, itemName, "view-returning contracts must match exactly one view parameter source.");
+                return std::nullopt;
+            }
+            signature.viewReturnSourceParam = sourceParam;
+        }
+
+        if (!typeDiagnostics.empty()) {
+            for (const auto& diagnostic : typeDiagnostics) {
+                pushContractDiagnostic(diagnostics, configPath, dependencyRoot, itemName, diagnostic.message);
+            }
+            return std::nullopt;
+        }
+
+        return signature;
+    } catch (const DiagnosticError& error) {
+        for (const auto& diagnostic : error.diagnostics()) {
+            pushContractDiagnostic(diagnostics, configPath, dependencyRoot, itemName, diagnostic.message);
+        }
+        return std::nullopt;
+    }
+}
+
 } // namespace
 
 std::filesystem::path ProjectLoader::normalizePath(const std::filesystem::path& path) const {
@@ -540,6 +714,83 @@ std::vector<ImportedBinding> ProjectLoader::resolveImports(const LoadedUnit& uni
         return binding;
     };
 
+    auto resolveDependencyFunctionBinding = [&](const std::string& dependencyRoot, const std::string& itemName) {
+        ImportedBinding binding;
+        binding.name = itemName;
+        binding.kind = SymbolKind::Function;
+
+        if (!project.config.has_value()) {
+            return binding;
+        }
+
+        const auto specIt = project.config->dependencySpecs.find(dependencyRoot);
+        if (specIt == project.config->dependencySpecs.end()) {
+            return binding;
+        }
+
+        const auto contractIt = specIt->second.functions.find(itemName);
+        if (contractIt == specIt->second.functions.end()) {
+            return binding;
+        }
+
+        std::vector<Diagnostic> diagnostics;
+        const auto signature = parseDependencyFunctionSignature(
+            project.config->path,
+            dependencyRoot,
+            itemName,
+            specIt->second,
+            contractIt->second,
+            &diagnostics);
+        if (!diagnostics.empty()) {
+            throwDiagnostics(std::move(diagnostics));
+        }
+        if (signature.has_value()) {
+            binding.functionSignature = *signature;
+        }
+        return binding;
+    };
+
+    auto makeExternalModuleBinding = [&](const std::string& dependencyRoot) {
+        ImportedBinding binding;
+        binding.name = dependencyRoot;
+        binding.kind = SymbolKind::Module;
+
+        if (!project.config.has_value()) {
+            return binding;
+        }
+
+        const auto specIt = project.config->dependencySpecs.find(dependencyRoot);
+        if (specIt == project.config->dependencySpecs.end() || specIt->second.functions.empty()) {
+            return binding;
+        }
+
+        auto moduleInfo = std::make_shared<ModuleInfo>();
+        moduleInfo->realmName = dependencyRoot;
+        std::vector<Diagnostic> diagnostics;
+        for (const auto& [functionName, contract] : specIt->second.functions) {
+            ImportedBinding exported;
+            exported.name = functionName;
+            exported.kind = SymbolKind::Function;
+            const auto signature = parseDependencyFunctionSignature(
+                project.config->path,
+                dependencyRoot,
+                functionName,
+                specIt->second,
+                contract,
+                &diagnostics);
+            if (signature.has_value()) {
+                exported.functionSignature = *signature;
+            }
+            moduleInfo->exportedItems[functionName] = std::move(exported);
+        }
+        if (!diagnostics.empty()) {
+            throwDiagnostics(std::move(diagnostics));
+        }
+
+        binding.moduleInfo = std::move(moduleInfo);
+        return binding;
+    };
+
     for (const auto& imp : imports) {
         if (imp.isSuper) {
             for (const auto& item : imp.specificItems) {
@@ -558,7 +809,7 @@ std::vector<ImportedBinding> ProjectLoader::resolveImports(const LoadedUnit& uni
                 continue;
             }
             if (isExternalRoot(baseSegments)) {
-                bindings.push_back(ImportedBinding{baseSegments.back(), SymbolKind::Module});
+                bindings.push_back(makeExternalModuleBinding(baseSegments.front()));
                 continue;
             }
             throwDiagnostic(importerPath, "module", "Unable to resolve imported module '" + imp.modulePath + "'.", imp.span);
@@ -605,7 +856,11 @@ std::vector<ImportedBinding> ProjectLoader::resolveImports(const LoadedUnit& uni
 
         if (isExternalRoot(baseSegments)) {
             for (const auto& item : imp.specificItems) {
-                bindings.push_back(ImportedBinding{item, std::isupper(static_cast<unsigned char>(item.front())) != 0 ? SymbolKind::Shape : SymbolKind::Function});
+                if (std::isupper(static_cast<unsigned char>(item.front())) != 0) {
+                    bindings.push_back(ImportedBinding{item, SymbolKind::Shape});
+                } else {
+                    bindings.push_back(resolveDependencyFunctionBinding(baseSegments.front(), item));
+                }
             }
             continue;
         }

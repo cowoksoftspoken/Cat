@@ -49,7 +49,7 @@ fn loop_scope(limit: Int32) -> Int32 {
     give i
 }
 
-fn scan_scope(data: look Span) -> Int32 {
+fn scan_scope(data: look Span of Int32) -> Int32 {
     slot total: Int32 = 0
     scan item over data {
         total = total + item

@@ -1,0 +1,8 @@
+realm main
+
+import native.{echo}
+
+fn main() {
+    hold code = echo("ping")
+    println(code)
+}

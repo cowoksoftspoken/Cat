@@ -1,0 +1,28 @@
+oir.realm test.layout
+oir.shape Header [abi=claw link=shared symbol=test.layout::Header ffi=false]
+  layout repr=claw-internal kind=aggregate size=4 align=2 pass=direct ffi=false
+  field major: UInt16 @offset=0 size=2 align=2
+  field minor: UInt16 @offset=2 size=2 align=2
+oir.shape Packet [abi=claw link=shared symbol=test.layout::Packet ffi=false]
+  layout repr=claw-internal kind=aggregate size=32 align=8 pass=indirect ffi=false
+  field seq: UInt32 @offset=0 size=4 align=4
+  field header: Header @offset=4 size=4 align=2
+  field payload: Bytes @offset=8 size=24 align=8
+oir.choice Message [abi=claw link=shared symbol=test.layout::Message ffi=false]
+  layout repr=claw-internal kind=tagged size=48 align=8 pass=indirect ffi=false tag=4 payload_offset=8 payload_size=40
+  case ping @payload_offset=8 size=0 align=1
+  case data(Packet, UInt32) @payload_offset=8 size=40 align=8
+oir.fn inspect(msg: Message [indirect]) -> UInt32 [scalar] [abi=claw link=internal symbol=test.layout::inspect ffi=false]
+  block entry:
+    pick msg : Message
+    case ping -> pick_ping_0
+    case data(packet, code) -> pick_data_1
+  block pick_ping_0:
+    drop msg : Message
+    return 0 : UInt32
+  block pick_data_1:
+    %t0 = field packet.seq : UInt32
+    call print(%t0) : Unit
+    drop packet : Packet
+    drop msg : Message
+    return code : UInt32

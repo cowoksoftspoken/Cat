@@ -9,6 +9,6 @@ choice Maybe of T {
     some(value: T)
 }
 
-fn broken(a: Box, b: Maybe of Int32, Text, c: Text of Int32) {
+fn broken(a: Box, b: Maybe of Int32, Text, c: Text of Int32, data: Span, items: Vec, pairs: Table of Text) {
     give
 }

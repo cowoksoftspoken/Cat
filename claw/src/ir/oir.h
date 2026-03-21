@@ -1,5 +1,7 @@
 #pragma once
 
+#include "analysis/types.h"
+
 #include <optional>
 #include <string>
 #include <string_view>
@@ -28,6 +30,7 @@ struct OirValue {
 struct OirParam {
     std::string name;
     std::string type;
+    AbiPassKind passKind = AbiPassKind::Unknown;
 };
 
 struct OirShapeField {
@@ -114,11 +117,20 @@ struct OirSkipInst {
     std::string targetLabel;
 };
 
+struct OirExternalCallInfo {
+    std::string dependencyRoot;
+    std::string abi = "unknown";
+    std::string linkageName;
+    bool rawOnly = true;
+    bool opaqueResult = false;
+};
+
 struct OirCallInst {
     std::optional<std::string> result;
     std::string callee;
     std::vector<OirValue> args;
     std::string type;
+    std::optional<OirExternalCallInfo> externalInfo;
 };
 
 struct OirFieldInst {
@@ -156,6 +168,7 @@ using OirInst = std::variant<
 
 struct OirBlock {
     std::string label;
+    std::optional<std::string> rawRegion;
     std::vector<OirInst> insts;
 };
 
@@ -163,17 +176,25 @@ struct OirFunction {
     std::string name;
     std::vector<OirParam> params;
     std::string returnType;
+    AbiPassKind returnPassKind = AbiPassKind::Unknown;
+    SymbolLinkInfo linkage;
     std::vector<OirBlock> blocks;
 };
 
 struct OirShape {
     std::string name;
+    std::vector<std::string> typeParams;
     std::vector<OirShapeField> fields;
+    SymbolLinkInfo linkage;
+    std::optional<TypeLayoutInfo> layout;
 };
 
 struct OirChoice {
     std::string name;
+    std::vector<std::string> typeParams;
     std::vector<OirChoiceCase> cases;
+    SymbolLinkInfo linkage;
+    std::optional<TypeLayoutInfo> layout;
 };
 
 using OirDecl = std::variant<OirFunction, OirShape, OirChoice>;
@@ -185,6 +206,7 @@ struct OirRealm {
 
 struct OirProgram {
     std::string entryRealm;
+    std::string entrySymbol;
     std::vector<OirRealm> realms;
 };
 
@@ -207,10 +229,10 @@ private:
     const SemanticAnalyzer& sema;
     const OwnershipResult* ownership = nullptr;
 
-    std::optional<OirDecl> lowerDecl(const Decl* decl) const;
-    OirFunction lowerFn(const FnDecl* fn) const;
-    OirShape lowerShape(const ShapeDecl* shape) const;
-    OirChoice lowerChoice(const ChoiceDecl* choice) const;
+    std::optional<OirDecl> lowerDecl(const Decl* decl, std::string_view realmName) const;
+    OirFunction lowerFn(const FnDecl* fn, std::string_view realmName) const;
+    OirShape lowerShape(const ShapeDecl* shape, std::string_view realmName) const;
+    OirChoice lowerChoice(const ChoiceDecl* choice, std::string_view realmName) const;
 };
 
 OirProgram buildOirProgram(std::string_view entryRealm, const std::vector<OirUnitView>& units);
