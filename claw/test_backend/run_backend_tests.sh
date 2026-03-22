@@ -51,6 +51,7 @@ check_emit_case() {
 check_emit_case "test_backend/basic_call.cat" "test_backend/basic_call.expect" "basic_call.cat"
 check_emit_case "test_backend/runtime_print.cat" "test_backend/runtime_print.expect" "runtime_print.cat"
 check_emit_case "test_backend/branch_compare.cat" "test_backend/branch_compare.expect" "branch_compare.cat"
+check_emit_case "test_backend/text_builtins.cat" "test_backend/text_builtins.expect" "text_builtins.cat"
 check_emit_case "test_backend/pkg_external_safe_scalar" "test_backend/pkg_external_safe_scalar/emit_llvm.expect" "pkg_external_safe_scalar"
 
 echo "all llvm backend tests passed"

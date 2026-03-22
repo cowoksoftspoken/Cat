@@ -7,6 +7,8 @@ Current scope:
 - branch / compare lowering
 - runtime `print` / `println` declarations and string constants
 - typed safe external scalar calls
+- checked lowering for core `Text` builtins such as `len`, `is_empty`, `byte_at`, and `slice`
+- explicit LLVM lowering of the current `bounds_check` path into branch-to-defect flow
 
 Primary runner:
 - `bash test_backend/run_backend_tests.sh`

@@ -164,6 +164,11 @@ std::string tailSegment(std::string_view text) {
     return pos == std::string_view::npos ? std::string(text) : std::string(text.substr(pos + 1));
 }
 
+std::string receiverSegment(std::string_view text) {
+    const size_t pos = text.rfind('.');
+    return pos == std::string_view::npos ? std::string() : std::string(text.substr(0, pos));
+}
+
 bool isSignedIntegerType(std::string_view typeName) {
     return typeName == "Int8" || typeName == "Int16" || typeName == "Int32" || typeName == "Int64" ||
         typeName == "Int128" || typeName == "ISize";
@@ -183,10 +188,16 @@ struct FunctionState {
     const LirFunction& function;
     std::unordered_map<std::string, std::string> stackPointers;
     std::unordered_map<std::string, std::string> params;
+    std::unordered_map<std::string, std::string> valueTypes;
     int nextLocal = 0;
+    int nextInlineBlock = 0;
 
     std::string temp(std::string_view prefix) {
         return localName(std::string(prefix) + "." + std::to_string(nextLocal++));
+    }
+
+    std::string inlineLabel(std::string_view prefix) {
+        return blockLabel(function.name + "." + std::string(prefix) + "." + std::to_string(nextInlineBlock++));
     }
 };
 
@@ -222,6 +233,20 @@ private:
     std::string runtimeSymbol(std::string_view callee, const std::string& argType);
     std::string externalSymbol(const LirCallInst& call);
     std::string emitDeclarations();
+    std::string valueTypeForName(std::string_view name, const FunctionState& state) const;
+    std::string ensureNamedValue(std::string_view name, FunctionState& state, std::vector<std::string>& lines);
+    std::string extractLength(
+        const std::string& aggregateValue,
+        std::string_view receiverType,
+        FunctionState& state,
+        std::vector<std::string>& lines);
+    std::string extractPointer(
+        const std::string& aggregateValue,
+        std::string_view receiverType,
+        FunctionState& state,
+        std::vector<std::string>& lines);
+    void emitBoundsCheck(const LirBoundsCheckInst& value, FunctionState& state, std::vector<std::string>& lines);
+    void emitBuiltinCall(const LirCallInst& value, FunctionState& state, std::vector<std::string>& lines);
     std::string ensureValue(const LirValue& value, FunctionState& state, std::vector<std::string>& lines);
     std::string symbolForDirectCall(std::string_view callee) const;
     std::string emitFunction(const LirFunction& fn);
@@ -481,6 +506,216 @@ std::string LlvmEmitter::emitDeclarations() {
     return out.str();
 }
 
+std::string LlvmEmitter::valueTypeForName(std::string_view name, const FunctionState& state) const {
+    const auto it = state.valueTypes.find(std::string(name));
+    return it != state.valueTypes.end() ? it->second : std::string();
+}
+
+std::string LlvmEmitter::ensureNamedValue(std::string_view name, FunctionState& state, std::vector<std::string>& lines) {
+    const std::string type = valueTypeForName(name, state);
+    if (type.empty()) {
+        throw std::runtime_error("LLVM lowering could not resolve type for value '" + std::string(name) + "'.");
+    }
+    return ensureValue(LirValue{std::string(name), type, false}, state, lines);
+}
+
+std::string LlvmEmitter::extractLength(
+    const std::string& aggregateValue,
+    std::string_view receiverType,
+    FunctionState& state,
+    std::vector<std::string>& lines) {
+    const std::string baseType = stripGenericArgs(stripViewPrefix(receiverType));
+    if (baseType == "Text") {
+        const std::string lengthReg = state.temp("text.len");
+        lines.push_back("  " + lengthReg + " = extractvalue %claw.slice " + aggregateValue + ", 1");
+        return lengthReg;
+    }
+    if (baseType == "Bytes") {
+        const std::string lengthReg = state.temp("bytes.len");
+        lines.push_back("  " + lengthReg + " = extractvalue %claw.buffer " + aggregateValue + ", 1");
+        return lengthReg;
+    }
+    throw std::runtime_error("LLVM lowering does not yet support length extraction for receiver type '" + std::string(receiverType) + "'.");
+}
+
+std::string LlvmEmitter::extractPointer(
+    const std::string& aggregateValue,
+    std::string_view receiverType,
+    FunctionState& state,
+    std::vector<std::string>& lines) {
+    const std::string baseType = stripGenericArgs(stripViewPrefix(receiverType));
+    if (baseType == "Text") {
+        const std::string pointerReg = state.temp("text.ptr");
+        lines.push_back("  " + pointerReg + " = extractvalue %claw.slice " + aggregateValue + ", 0");
+        return pointerReg;
+    }
+    if (baseType == "Bytes") {
+        const std::string pointerReg = state.temp("bytes.ptr");
+        lines.push_back("  " + pointerReg + " = extractvalue %claw.buffer " + aggregateValue + ", 0");
+        return pointerReg;
+    }
+    throw std::runtime_error("LLVM lowering does not yet support pointer extraction for receiver type '" + std::string(receiverType) + "'.");
+}
+
+void LlvmEmitter::emitBoundsCheck(const LirBoundsCheckInst& value, FunctionState& state, std::vector<std::string>& lines) {
+    const std::string receiverType = valueTypeForName(value.subject, state);
+    if (receiverType.empty()) {
+        throw std::runtime_error("LLVM lowering could not resolve bounds-check receiver '" + value.subject + "'.");
+    }
+
+    const std::string receiverValue = ensureNamedValue(value.subject, state, lines);
+    const std::string lengthValue = extractLength(receiverValue, receiverType, state, lines);
+    const std::string failLabel = blockLabel(value.failLabel);
+    const std::string continueLabel = state.inlineLabel("bounds.ok");
+
+    if (value.kind == "byte_at") {
+        if (value.args.size() != 1) {
+            throw std::runtime_error("LLVM lowering expected one argument for byte_at bounds check.");
+        }
+        const std::string indexValue = ensureValue(value.args[0], state, lines);
+        const std::string checkValue = state.temp("bounds.byte_at");
+        lines.push_back("  " + checkValue + " = icmp ult i64 " + indexValue + ", " + lengthValue);
+        lines.push_back("  br i1 " + checkValue + ", label %" + continueLabel + ", label %" + failLabel);
+        lines.push_back(continueLabel + ":");
+        return;
+    }
+
+    if (value.kind == "first_byte" || value.kind == "last_byte") {
+        const std::string checkValue = state.temp("bounds.non_empty");
+        lines.push_back("  " + checkValue + " = icmp ne i64 " + lengthValue + ", 0");
+        lines.push_back("  br i1 " + checkValue + ", label %" + continueLabel + ", label %" + failLabel);
+        lines.push_back(continueLabel + ":");
+        return;
+    }
+
+    if (value.kind == "slice") {
+        if (value.args.size() != 2) {
+            throw std::runtime_error("LLVM lowering expected two arguments for slice bounds check.");
+        }
+        const std::string startValue = ensureValue(value.args[0], state, lines);
+        const std::string countValue = ensureValue(value.args[1], state, lines);
+        const std::string startOkValue = state.temp("bounds.slice.start");
+        const std::string startOkLabel = state.inlineLabel("bounds.slice.start_ok");
+        lines.push_back("  " + startOkValue + " = icmp ule i64 " + startValue + ", " + lengthValue);
+        lines.push_back("  br i1 " + startOkValue + ", label %" + startOkLabel + ", label %" + failLabel);
+        lines.push_back(startOkLabel + ":");
+        const std::string remainingValue = state.temp("bounds.slice.remaining");
+        lines.push_back("  " + remainingValue + " = sub i64 " + lengthValue + ", " + startValue);
+        const std::string countOkValue = state.temp("bounds.slice.count");
+        lines.push_back("  " + countOkValue + " = icmp ule i64 " + countValue + ", " + remainingValue);
+        lines.push_back("  br i1 " + countOkValue + ", label %" + continueLabel + ", label %" + failLabel);
+        lines.push_back(continueLabel + ":");
+        return;
+    }
+
+    throw std::runtime_error("LLVM lowering does not yet support bounds_check kind '" + value.kind + "'.");
+}
+
+void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state, std::vector<std::string>& lines) {
+    const std::string receiverName = receiverSegment(value.callee);
+    if (receiverName.empty()) {
+        throw std::runtime_error("LLVM lowering expected a builtin receiver for '" + value.callee + "'.");
+    }
+
+    const std::string receiverType = valueTypeForName(receiverName, state);
+    if (receiverType.empty()) {
+        throw std::runtime_error("LLVM lowering could not resolve builtin receiver type for '" + receiverName + "'.");
+    }
+
+    const std::string receiverValue = ensureNamedValue(receiverName, state, lines);
+    const std::string methodName = tailSegment(value.callee);
+    const std::string baseType = stripGenericArgs(stripViewPrefix(receiverType));
+    const auto storeResultType = [&]() {
+        if (value.result.has_value()) {
+            state.valueTypes[*value.result] = value.type;
+        }
+    };
+
+    if ((baseType == "Text" || baseType == "Bytes") && methodName == "len") {
+        if (!value.result.has_value()) {
+            return;
+        }
+        const std::string resultReg = localName(*value.result);
+        const std::string lengthValue = extractLength(receiverValue, receiverType, state, lines);
+        lines.push_back("  " + resultReg + " = add i64 0, " + lengthValue);
+        storeResultType();
+        return;
+    }
+
+    if ((baseType == "Text" || baseType == "Bytes") && methodName == "is_empty") {
+        if (!value.result.has_value()) {
+            return;
+        }
+        const std::string resultReg = localName(*value.result);
+        const std::string lengthValue = extractLength(receiverValue, receiverType, state, lines);
+        lines.push_back("  " + resultReg + " = icmp eq i64 " + lengthValue + ", 0");
+        storeResultType();
+        return;
+    }
+
+    if (baseType == "Text" && methodName == "byte_at") {
+        if (value.args.size() != 1) {
+            throw std::runtime_error("LLVM lowering expected one argument for text.byte_at.");
+        }
+        if (!value.result.has_value()) {
+            return;
+        }
+        const std::string indexValue = ensureValue(value.args[0], state, lines);
+        const std::string pointerValue = extractPointer(receiverValue, receiverType, state, lines);
+        const std::string elementPtr = state.temp("text.byte_at.ptr");
+        lines.push_back("  " + elementPtr + " = getelementptr inbounds i8, ptr " + pointerValue + ", i64 " + indexValue);
+        lines.push_back("  " + localName(*value.result) + " = load i8, ptr " + elementPtr);
+        storeResultType();
+        return;
+    }
+
+    if (baseType == "Text" && methodName == "first_byte") {
+        if (!value.result.has_value()) {
+            return;
+        }
+        const std::string pointerValue = extractPointer(receiverValue, receiverType, state, lines);
+        lines.push_back("  " + localName(*value.result) + " = load i8, ptr " + pointerValue);
+        storeResultType();
+        return;
+    }
+
+    if (baseType == "Text" && methodName == "last_byte") {
+        if (!value.result.has_value()) {
+            return;
+        }
+        const std::string lengthValue = extractLength(receiverValue, receiverType, state, lines);
+        const std::string indexValue = state.temp("text.last_byte.index");
+        lines.push_back("  " + indexValue + " = sub i64 " + lengthValue + ", 1");
+        const std::string pointerValue = extractPointer(receiverValue, receiverType, state, lines);
+        const std::string elementPtr = state.temp("text.last_byte.ptr");
+        lines.push_back("  " + elementPtr + " = getelementptr inbounds i8, ptr " + pointerValue + ", i64 " + indexValue);
+        lines.push_back("  " + localName(*value.result) + " = load i8, ptr " + elementPtr);
+        storeResultType();
+        return;
+    }
+
+    if (baseType == "Text" && methodName == "slice") {
+        if (value.args.size() != 2) {
+            throw std::runtime_error("LLVM lowering expected two arguments for text.slice.");
+        }
+        if (!value.result.has_value()) {
+            return;
+        }
+        const std::string startValue = ensureValue(value.args[0], state, lines);
+        const std::string countValue = ensureValue(value.args[1], state, lines);
+        const std::string pointerValue = extractPointer(receiverValue, receiverType, state, lines);
+        const std::string slicePtr = state.temp("text.slice.ptr");
+        lines.push_back("  " + slicePtr + " = getelementptr inbounds i8, ptr " + pointerValue + ", i64 " + startValue);
+        const std::string sliceBase = state.temp("text.slice.base");
+        lines.push_back("  " + sliceBase + " = insertvalue %claw.slice poison, ptr " + slicePtr + ", 0");
+        lines.push_back("  " + localName(*value.result) + " = insertvalue %claw.slice " + sliceBase + ", i64 " + countValue + ", 1");
+        storeResultType();
+        return;
+    }
+
+    throw std::runtime_error("LLVM lowering does not yet support builtin method '" + value.callee + "'.");
+}
+
 std::string LlvmEmitter::ensureValue(const LirValue& value, FunctionState& state, std::vector<std::string>& lines) {
     const std::string llvmValueType = llvmType(value.type);
     if (llvmValueType == "void" || value.isUnit) {
@@ -543,6 +778,7 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
     FunctionState state{fn};
     for (const auto& param : fn.params) {
         state.params[param.name] = localName("arg." + param.name);
+        state.valueTypes[param.name] = param.type;
     }
 
     std::ostringstream out;
@@ -566,6 +802,7 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
                 [&](const LirObjectInst& value) {
                     const std::string pointerName = localName(value.name + ".addr");
                     state.stackPointers[value.name] = pointerName;
+                    state.valueTypes[value.name] = value.type;
                     blockLines.push_back("  " + pointerName + " = alloca " + llvmType(value.type));
                 },
                 [&](const LirStoreInst& value) {
@@ -608,6 +845,11 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
                     hasTerminator = true;
                 },
                 [&](const LirCallInst& value) {
+                    if (value.kind == LirCallKind::Builtin) {
+                        emitBuiltinCall(value, state, blockLines);
+                        return;
+                    }
+
                     std::vector<std::string> args;
                     std::vector<std::string> argTypes;
                     for (const auto& arg : value.args) {
@@ -631,7 +873,7 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
                         calleeSymbol = externalSymbol(value);
                         break;
                     case LirCallKind::Builtin:
-                        throw std::runtime_error("LLVM lowering does not yet support builtin method calls directly.");
+                        throw std::runtime_error("LLVM lowering routed builtin call incorrectly for '" + value.callee + "'.");
                     case LirCallKind::Foreign:
                         throw std::runtime_error("LLVM lowering does not yet support foreign calls without typed contracts.");
                     }
@@ -652,6 +894,9 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
                     }
                     call << ")";
                     blockLines.push_back(call.str());
+                    if (value.result.has_value() && returnType != "void") {
+                        state.valueTypes[*value.result] = value.type;
+                    }
                 },
                 [&](const LirBinaryInst& value) {
                     const std::string resultType = llvmType(value.type);
@@ -697,6 +942,7 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
                     }
                     line << " " << left << ", " << right;
                     blockLines.push_back(line.str());
+                    state.valueTypes[value.result] = value.type;
                 },
                 [&](const LirFieldInst& value) {
                     const std::string objectBaseType = stripGenericArgs(stripViewPrefix(value.object.type));
@@ -710,8 +956,10 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
                     }
                     const std::string objectValue = ensureValue(value.object, state, blockLines);
                     blockLines.push_back("  " + localName(value.result) + " = extractvalue " + llvmType(value.object.type) + " " + objectValue + ", " + std::to_string(indexIt->second));
+                    state.valueTypes[value.result] = value.type;
                 },
                 [&](const LirPhiInst& value) {
+                    state.valueTypes[value.result] = value.type;
                     blockLines.push_back("  ; phi " + value.result + " omitted in initial LLVM lowering");
                 },
                 [&](const LirDefectInst& value) {
@@ -721,8 +969,8 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
                     blockLines.push_back("  unreachable");
                     hasTerminator = true;
                 },
-                [&](const LirBoundsCheckInst&) {
-                    throw std::runtime_error("LLVM lowering does not yet support bounds_check blocks.");
+                [&](const LirBoundsCheckInst& value) {
+                    emitBoundsCheck(value, state, blockLines);
                 },
                 [&](const LirStoreFieldInst&) {
                     throw std::runtime_error("LLVM lowering does not yet support store_field.");

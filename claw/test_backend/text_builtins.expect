@@ -1,0 +1,75 @@
+; ModuleID = 'claw'
+target triple = "x86_64-pc-windows-gnu"
+
+%claw.slice = type { ptr, i64 }
+%claw.buffer = type { ptr, i64, i64 }
+@.str.0 = private unnamed_addr constant [5 x i8] c"claw\00"
+
+declare void @"claw.runtime.print.slice"(%claw.slice)
+declare void @"claw.runtime.print.i8"(i8)
+declare void @"claw.runtime.print.i64"(i64)
+declare void @llvm.trap()
+
+define i8 @"test_backend.text_builtins::head"(%claw.slice %arg.text) {
+entry:
+  %text.len.0 = extractvalue %claw.slice %arg.text, 1
+  %bounds.byte_at.1 = icmp ult i64 0, %text.len.0
+  br i1 %bounds.byte_at.1, label %head.bounds.ok.0, label %entry.defect.bounds.0
+head.bounds.ok.0:
+  %text.ptr.2 = extractvalue %claw.slice %arg.text, 0
+  %text.byte_at.ptr.3 = getelementptr inbounds i8, ptr %text.ptr.2, i64 0
+  %t0 = load i8, ptr %text.byte_at.ptr.3
+  ret i8 %t0
+entry.defect.bounds.0:
+  ; defect bounds "byte_at requires in-range access"
+  call void @llvm.trap()
+  unreachable
+}
+
+define i64 @"test_backend.text_builtins::prefix_len"(%claw.slice %arg.text) {
+entry:
+  %text.len.0 = extractvalue %claw.slice %arg.text, 1
+  %bounds.slice.start.1 = icmp ule i64 0, %text.len.0
+  br i1 %bounds.slice.start.1, label %prefix_len.bounds.slice.start_ok.1, label %entry.defect.bounds.0
+prefix_len.bounds.slice.start_ok.1:
+  %bounds.slice.remaining.2 = sub i64 %text.len.0, 0
+  %bounds.slice.count.3 = icmp ule i64 2, %bounds.slice.remaining.2
+  br i1 %bounds.slice.count.3, label %prefix_len.bounds.ok.0, label %entry.defect.bounds.0
+prefix_len.bounds.ok.0:
+  %text.ptr.4 = extractvalue %claw.slice %arg.text, 0
+  %text.slice.ptr.5 = getelementptr inbounds i8, ptr %text.ptr.4, i64 0
+  %text.slice.base.6 = insertvalue %claw.slice poison, ptr %text.slice.ptr.5, 0
+  %t0 = insertvalue %claw.slice %text.slice.base.6, i64 2, 1
+  %prefix.addr = alloca %claw.slice
+  store %claw.slice %t0, ptr %prefix.addr
+  %prefix.load.7 = load %claw.slice, ptr %prefix.addr
+  call void @"claw.runtime.print.slice"(%claw.slice %prefix.load.7)
+  %text.len.8 = extractvalue %claw.slice %arg.text, 1
+  %t1 = icmp eq i64 %text.len.8, 0
+  br i1 %t1, label %when_then_0, label %when_else_1
+when_then_0:
+  ret i64 0
+when_else_1:
+  %text.len.9 = extractvalue %claw.slice %arg.text, 1
+  %t2 = add i64 0, %text.len.9
+  ret i64 %t2
+entry.defect.bounds.0:
+  ; defect bounds "slice requires in-range access"
+  call void @llvm.trap()
+  unreachable
+}
+
+define i32 @"test_backend.text_builtins::main"() {
+entry:
+  %str.ptr.0 = getelementptr inbounds [5 x i8], ptr @.str.0, i64 0, i64 0
+  %str.slice.1 = insertvalue %claw.slice poison, ptr %str.ptr.0, 0
+  %str.slice.2 = insertvalue %claw.slice %str.slice.1, i64 4, 1
+  %t0 = call i8 @"test_backend.text_builtins::head"(%claw.slice %str.slice.2)
+  call void @"claw.runtime.print.i8"(i8 %t0)
+  %str.ptr.3 = getelementptr inbounds [5 x i8], ptr @.str.0, i64 0, i64 0
+  %str.slice.4 = insertvalue %claw.slice poison, ptr %str.ptr.3, 0
+  %str.slice.5 = insertvalue %claw.slice %str.slice.4, i64 4, 1
+  %t1 = call i64 @"test_backend.text_builtins::prefix_len"(%claw.slice %str.slice.5)
+  call void @"claw.runtime.print.i64"(i64 %t1)
+  ret i32 0
+}

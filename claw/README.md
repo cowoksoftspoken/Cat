@@ -71,6 +71,8 @@ The initial LLVM backend is already alive for a strict subset:
 - runtime `print` / `println` lowering
 - string constant lowering to module globals
 - safe typed external scalar calls
+- checked lowering for core `Text` builtins such as `len`, `is_empty`, `byte_at`, `first_byte`, `last_byte`, and `slice`
+- explicit LLVM lowering for the current `bounds_check` path into branch-to-defect flow
 - textual LLVM IR emission through `claw emit-llvm ...`
 
 Backend bring-up is validated today by assembling emitted IR with `llvm-as` and lowering it with `llc` for the current backend fixtures.
@@ -80,7 +82,7 @@ Backend bring-up is validated today by assembling emitted IR with `llvm-as` and 
 Claw is not yet a finished production compiler.
 
 Important missing pieces:
-- broader LLVM lowering coverage for `pick`, `lift`, richer bounds-check paths, more aggregate operations, and more builtin dispatch cases
+- broader LLVM lowering coverage for `pick`, `lift`, richer aggregate operations, more builtin dispatch cases, and deeper checked container paths beyond the current `Text` subset
 - fuller typed raw / FFI contracts for memory operations, effects, and non-function boundaries
 - richer ownership precision across more complex aliasing cases
 - concurrency-related safety checks such as `sendable` / `shareable`

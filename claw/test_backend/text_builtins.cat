@@ -1,0 +1,22 @@
+realm test_backend.text_builtins
+
+fn head(text: look Text) -> Byte {
+    give text.byte_at(0)
+}
+
+fn prefix_len(text: look Text) -> USize {
+    hold prefix: look Text = text.slice(0, 2)
+    print(prefix)
+
+    when text.is_empty() {
+        give 0
+    } otherwise {
+        give text.len()
+    }
+}
+
+fn main() -> Int32 {
+    print(head("claw"))
+    print(prefix_len("claw"))
+    give 0
+}
