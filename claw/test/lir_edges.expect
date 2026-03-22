@@ -23,7 +23,7 @@ lir.fn process(source: Outcome of Int32, Text [indirect], text: look Text [borro
     goto scan_exit_1
   block scan_exit_1 [preds: entry, scan_body_0]:
     %phi0 = phi Control [entry: ctrl.entry, scan_body_0: ctrl.scan_body_0]
-    lift source -> value, success scan_exit_1.lift_ok.0, fail lift_fail_2
+    lift source -> value, success scan_exit_1.lift_ok.0, fail issue -> lift_fail_2
   block scan_exit_1.lift_ok.0 [preds: scan_exit_1]:
     %t3 = add sum, value : Int32
     drop source : Outcome of Int32, Text

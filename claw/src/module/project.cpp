@@ -487,6 +487,17 @@ bool ProjectLoader::isExternalRoot(const std::vector<std::string>& segments) con
     return project.config.has_value() && project.config->dependencies.find(root) != project.config->dependencies.end();
 }
 
+bool ProjectLoader::isWorkspaceEntrySource(const std::filesystem::path& path) const {
+    if (!project.structuredPackage) {
+        return false;
+    }
+    return normalizePath(path) == normalizePath(project.packageRoot / "main.cat");
+}
+
+bool ProjectLoader::refersToWorkspaceEntryRealm(const std::vector<std::string>& segments) const {
+    return project.structuredPackage && segments.size() == 1 && segments.front() == "main";
+}
+
 std::optional<std::filesystem::path> ProjectLoader::tryResolveNamespaceDir(const std::vector<std::string>& segments) {
     auto currentDir = project.packageRoot;
     for (const auto& segment : segments) {
@@ -532,19 +543,32 @@ std::optional<std::filesystem::path> ProjectLoader::tryResolveRealmFile(const st
     }
 
     const auto candidate = normalizePath(parentDir.value() / (segments.back() + ".cat"));
-    return (std::filesystem::exists(candidate) && std::filesystem::is_regular_file(candidate))
-        ? std::optional<std::filesystem::path>(candidate)
-        : std::nullopt;
+    if (!std::filesystem::exists(candidate) || !std::filesystem::is_regular_file(candidate)) {
+        return std::nullopt;
+    }
+    if (isWorkspaceEntrySource(candidate)) {
+        return std::nullopt;
+    }
+    return candidate;
 }
 std::filesystem::path ProjectLoader::resolveSiblingModule(
     const std::filesystem::path& importerPath,
-    const std::string& name) {
+    const std::string& name,
+    SourceSpan span) {
     const auto candidate = normalizePath(importerPath.parent_path() / (name + ".cat"));
     if (!std::filesystem::exists(candidate)) {
         throwDiagnostic(
             importerPath,
             "module",
-            "Unable to resolve sibling module '" + name + "' via super import.");
+            "Unable to resolve sibling module '" + name + "' via super import.",
+            span);
+    }
+    if (isWorkspaceEntrySource(candidate)) {
+        throwDiagnostic(
+            importerPath,
+            "module",
+            "Workspace entry 'main.cat' cannot be imported or treated as a module surface.",
+            span);
     }
     return candidate;
 }
@@ -590,7 +614,7 @@ ProjectLoader::ExportSummary ProjectLoader::buildExportSummary(const LoadedUnit&
     }
 
     ExportSummary summary;
-    if (!unit.ast) {
+    if (!unit.ast || isWorkspaceEntrySource(unit.path)) {
         exportCache[key] = summary;
         return summary;
     }
@@ -794,13 +818,20 @@ std::vector<ImportedBinding> ProjectLoader::resolveImports(const LoadedUnit& uni
     for (const auto& imp : imports) {
         if (imp.isSuper) {
             for (const auto& item : imp.specificItems) {
-                const size_t moduleIndex = loadUnitRecursive(resolveSiblingModule(importerPath, item));
+                const size_t moduleIndex = loadUnitRecursive(resolveSiblingModule(importerPath, item, imp.span));
                 bindings.push_back(makeModuleBinding(item, moduleIndex));
             }
             continue;
         }
 
         const auto baseSegments = splitRealmPath(imp.modulePath);
+        if (refersToWorkspaceEntryRealm(baseSegments)) {
+            throwDiagnostic(
+                importerPath,
+                "module",
+                "Workspace entry 'main.cat' cannot be imported or treated as a module surface.",
+                imp.span);
+        }
         if (imp.specificItems.empty()) {
             const auto resolved = tryResolveRealmFile(baseSegments);
             if (resolved.has_value()) {

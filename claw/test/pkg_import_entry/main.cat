@@ -1,0 +1,12 @@
+realm main
+
+import helper.{touch}
+
+share fn boot() {
+    println("boot")
+}
+
+fn main() -> Int32 {
+    touch()
+    give 0
+}

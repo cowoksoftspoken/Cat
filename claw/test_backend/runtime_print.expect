@@ -8,7 +8,7 @@ target triple = "x86_64-pc-windows-gnu"
 declare void @"claw.runtime.println.slice"(%claw.slice)
 declare void @"claw.runtime.print.i32"(i32)
 
-define void @"test_backend.runtime_print::main"() {
+define internal void @"test_backend.runtime_print::main"() {
 entry:
   %str.ptr.0 = getelementptr inbounds [6 x i8], ptr @.str.0, i64 0, i64 0
   %str.slice.1 = insertvalue %claw.slice poison, ptr %str.ptr.0, 0

@@ -1,0 +1,10 @@
+realm main
+
+share fn boot_banner() {
+    println("boot")
+}
+
+fn main() -> Int32 {
+    boot_banner()
+    give 0
+}

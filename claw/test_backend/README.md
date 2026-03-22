@@ -9,6 +9,8 @@ Current scope:
 - typed safe external scalar calls
 - checked lowering for core `Text` builtins such as `len`, `is_empty`, `byte_at`, and `slice`
 - explicit LLVM lowering of the current `bounds_check` path into branch-to-defect flow
+- concrete choice `pick` lowering with tag-based `switch`, payload extraction, and defect blocks
+- initial `lift` lowering for concrete `Outcome of T, E` values
 
 Primary runner:
 - `bash test_backend/run_backend_tests.sh`

@@ -1,0 +1,14 @@
+realm test_backend.lift_outcome
+
+choice Outcome of T, E {
+    ok(value: T)
+    fail(cause: E)
+}
+
+fn consume(source: Outcome of Int32, Int32) -> Int32 {
+    lift source as value fail issue {
+        give issue
+    }
+
+    give value + 1
+}

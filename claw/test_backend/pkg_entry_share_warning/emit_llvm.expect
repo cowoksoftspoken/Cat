@@ -1,0 +1,23 @@
+; ModuleID = 'claw'
+target triple = "x86_64-pc-windows-gnu"
+
+%claw.slice = type { ptr, i64 }
+%claw.buffer = type { ptr, i64, i64 }
+@.str.0 = private unnamed_addr constant [5 x i8] c"boot\00"
+
+declare void @"claw.runtime.println.slice"(%claw.slice)
+
+define internal void @"main::boot_banner"() {
+entry:
+  %str.ptr.0 = getelementptr inbounds [5 x i8], ptr @.str.0, i64 0, i64 0
+  %str.slice.1 = insertvalue %claw.slice poison, ptr %str.ptr.0, 0
+  %str.slice.2 = insertvalue %claw.slice %str.slice.1, i64 4, 1
+  call void @"claw.runtime.println.slice"(%claw.slice %str.slice.2)
+  ret void
+}
+
+define internal i32 @"main::main"() {
+entry:
+  call void @"main::boot_banner"()
+  ret i32 0
+}

@@ -1,0 +1,7 @@
+realm helper
+
+import main.{boot}
+
+share fn touch() {
+    boot()
+}

@@ -480,7 +480,7 @@ LirFunction lowerFunction(const OirFunction& fn, const std::unordered_set<std::s
                     if (hasTrailingInsts) {
                         successLabel = currentBlock.label + ".lift_ok." + std::to_string(nextLift++);
                     }
-                    currentBlock.insts.push_back(LirLiftInst{lowerValue(value.value), value.okName, successLabel, value.failLabel});
+                    currentBlock.insts.push_back(LirLiftInst{lowerValue(value.value), value.okName, value.failName, successLabel, value.failLabel});
                     if (!successLabel.empty()) {
                         lowered.blocks.push_back(std::move(currentBlock));
                         currentBlock = LirBlock{};
@@ -666,7 +666,7 @@ std::string formatInst(const LirInst& inst, int indent) {
             if (!value.successLabel.empty()) {
                 out << ", success " << value.successLabel;
             }
-            out << ", fail " << value.failLabel << "\n";
+            out << ", fail " << value.failName << " -> " << value.failLabel << "\n";
             return out.str();
         },
         [&](const LirBreakInst& value) {

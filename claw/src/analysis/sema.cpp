@@ -1331,6 +1331,17 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             if (outcomeType.name != "Outcome" || outcomeType.params.size() != 2) {
                 reportError(lift->expr.get(), "'lift' requires an Outcome value, got " + outcomeType.describe());
             } else {
+                const auto* outcomeInfo = lookupChoice("Outcome");
+                const bool validOutcomeShape =
+                    outcomeInfo &&
+                    outcomeInfo->variantOrder.size() == 2 &&
+                    outcomeInfo->variants.contains("ok") &&
+                    outcomeInfo->variants.contains("fail") &&
+                    outcomeInfo->variants.at("ok").payloadTypes.size() == 1 &&
+                    outcomeInfo->variants.at("fail").payloadTypes.size() == 1;
+                if (!validOutcomeShape) {
+                    reportError(lift->expr.get(), "'lift' requires Outcome to define ok(T) and fail(E) single-payload variants.");
+                }
                 okType = outcomeType.params[0];
                 failType = outcomeType.params[1];
             }

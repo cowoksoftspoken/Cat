@@ -1,0 +1,29 @@
+realm test_backend.choice_pick
+
+share shape Header {
+    major: UInt16
+    minor: UInt16
+}
+
+share shape Packet {
+    seq: UInt32
+    header: Header
+    payload: Bytes
+}
+
+share choice Message {
+    ping
+    data(packet: Packet, code: UInt32)
+}
+
+fn inspect(msg: Message) -> UInt32 {
+    pick msg {
+        ping {
+            give 0
+        }
+        data(packet, code) {
+            print(packet.seq)
+            give code
+        }
+    }
+}

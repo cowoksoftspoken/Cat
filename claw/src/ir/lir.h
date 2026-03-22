@@ -130,6 +130,7 @@ struct LirSwitchInst {
 struct LirLiftInst {
     LirValue value;
     std::string okName;
+    std::string failName;
     std::string successLabel;
     std::string failLabel;
 };

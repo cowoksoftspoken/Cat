@@ -106,6 +106,7 @@ struct OirPickInst {
 struct OirLiftInst {
     OirValue value;
     std::string okName;
+    std::string failName;
     std::string failLabel;
 };
 

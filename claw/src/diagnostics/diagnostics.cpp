@@ -7,6 +7,16 @@ namespace claw::frontend {
 
 namespace {
 
+std::string severityName(DiagnosticSeverity severity) {
+    switch (severity) {
+    case DiagnosticSeverity::Error:
+        return "error";
+    case DiagnosticSeverity::Warning:
+        return "warning";
+    }
+    return "error";
+}
+
 std::string trimLineEnding(std::string_view line) {
     while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
         line.remove_suffix(1);
@@ -65,7 +75,7 @@ std::string formatDiagnostic(
     std::ostringstream out;
     const std::string effectivePath = diagnostic.path.empty() ? std::string(path) : diagnostic.path;
 
-    out << "error";
+    out << severityName(diagnostic.severity);
     if (!diagnostic.stage.empty()) {
         out << "[" << diagnostic.stage << "]";
     }

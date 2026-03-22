@@ -70,6 +70,43 @@ echo "[build/pass] test/pkg_foreign_safe_scalar"
 echo "[build/pass] test/pkg_foreign_safe_scalar/claw.toml"
 "$CLAW_EXE" build "$ROOT_DIR/test/pkg_foreign_safe_scalar/claw.toml"
 
+echo "[check/warn] test/pkg_main_share_warning"
+main_share_warning_output=""
+if ! main_share_warning_output="$($CLAW_EXE check "$ROOT_DIR/test/pkg_main_share_warning" 2>&1)"; then
+  echo "expected pkg_main_share_warning to pass, but it failed" >&2
+  printf '%s
+' "$main_share_warning_output" >&2
+  exit 1
+fi
+if [[ "$main_share_warning_output" != *"warning[module]: Shared function 'boot_banner' in root main.cat has no effect because the workspace entry is not importable as a module."* ]] ||
+   [[ "$main_share_warning_output" != *"share fn boot_banner()"* ]] ||
+   [[ "$main_share_warning_output" != *"Check passed for realm: main"* ]]; then
+  echo "pkg_main_share_warning did not contain the expected warning output" >&2
+  printf '%s
+' "$main_share_warning_output" >&2
+  exit 1
+fi
+
+echo "[emit-oir] test/pkg_main_share_warning"
+main_share_oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/pkg_main_share_warning" | normalize_text)"
+if [[ "$main_share_oir_output" != *"link=internal symbol=main::boot_banner"* ]] ||
+   [[ "$main_share_oir_output" == *"link=shared symbol=main::boot_banner"* ]]; then
+  echo "pkg_main_share_warning emit_oir did not neutralize entry share linkage" >&2
+  printf '%s
+' "$main_share_oir_output" >&2
+  exit 1
+fi
+
+echo "[emit-lir] test/pkg_main_share_warning"
+main_share_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/pkg_main_share_warning" | normalize_text)"
+if [[ "$main_share_lir_output" != *"link=internal symbol=main::boot_banner"* ]] ||
+   [[ "$main_share_lir_output" == *"link=shared symbol=main::boot_banner"* ]]; then
+  echo "pkg_main_share_warning emit_lir did not neutralize entry share linkage" >&2
+  printf '%s
+' "$main_share_lir_output" >&2
+  exit 1
+fi
+
 echo "[check/fail] test/ownership.cat"
 ownership_output=""
 if ownership_output="$($CLAW_EXE check "$ROOT_DIR/test/ownership.cat" 2>&1)"; then
@@ -368,6 +405,20 @@ if [[ "$typed_external_raw_output" != *"External call 'status' is declared raw-o
   echo "pkg_typed_external_raw did not contain the expected typed raw-boundary diagnostic" >&2
   printf '%s
 ' "$typed_external_raw_output" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/pkg_import_entry"
+entry_import_output=""
+if entry_import_output="$($CLAW_EXE check "$ROOT_DIR/test/pkg_import_entry" 2>&1)"; then
+  echo "expected pkg_import_entry to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$entry_import_output" != *"Workspace entry 'main.cat' cannot be imported or treated as a module surface."* ]] ||
+   [[ "$entry_import_output" != *"import main.{boot}"* ]]; then
+  echo "pkg_import_entry did not contain the expected entry-import diagnostic" >&2
+  printf '%s
+' "$entry_import_output" >&2
   exit 1
 fi
 

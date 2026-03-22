@@ -10,7 +10,7 @@ declare void @"claw.runtime.print.i8"(i8)
 declare void @"claw.runtime.print.i64"(i64)
 declare void @llvm.trap()
 
-define i8 @"test_backend.text_builtins::head"(%claw.slice %arg.text) {
+define internal i8 @"test_backend.text_builtins::head"(%claw.slice %arg.text) {
 entry:
   %text.len.0 = extractvalue %claw.slice %arg.text, 1
   %bounds.byte_at.1 = icmp ult i64 0, %text.len.0
@@ -26,7 +26,7 @@ entry.defect.bounds.0:
   unreachable
 }
 
-define i64 @"test_backend.text_builtins::prefix_len"(%claw.slice %arg.text) {
+define internal i64 @"test_backend.text_builtins::prefix_len"(%claw.slice %arg.text) {
 entry:
   %text.len.0 = extractvalue %claw.slice %arg.text, 1
   %bounds.slice.start.1 = icmp ule i64 0, %text.len.0
@@ -59,7 +59,7 @@ entry.defect.bounds.0:
   unreachable
 }
 
-define i32 @"test_backend.text_builtins::main"() {
+define internal i32 @"test_backend.text_builtins::main"() {
 entry:
   %str.ptr.0 = getelementptr inbounds [5 x i8], ptr @.str.0, i64 0, i64 0
   %str.slice.1 = insertvalue %claw.slice poison, ptr %str.ptr.0, 0

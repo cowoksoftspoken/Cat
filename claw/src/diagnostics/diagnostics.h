@@ -15,11 +15,30 @@ struct SourceSpan {
     bool isValid() const;
 };
 
+enum class DiagnosticSeverity {
+    Error,
+    Warning,
+};
+
 struct Diagnostic {
+    DiagnosticSeverity severity = DiagnosticSeverity::Error;
     std::string stage;
     std::string message;
     SourceSpan span;
     std::string path;
+
+    Diagnostic() = default;
+    Diagnostic(
+        std::string stage,
+        std::string message,
+        SourceSpan span = {},
+        std::string path = {},
+        DiagnosticSeverity severity = DiagnosticSeverity::Error)
+        : severity(severity),
+          stage(std::move(stage)),
+          message(std::move(message)),
+          span(span),
+          path(std::move(path)) {}
 };
 
 class DiagnosticError final : public std::exception {

@@ -1,0 +1,43 @@
+; ModuleID = 'claw'
+target triple = "x86_64-pc-windows-gnu"
+
+%claw.slice = type { ptr, i64 }
+%claw.buffer = type { ptr, i64, i64 }
+%"test_backend.choice_pick::Header" = type { i16, i16 }
+
+%"test_backend.choice_pick::Packet" = type { i32, %"test_backend.choice_pick::Header", %claw.buffer }
+
+%"test_backend.choice_pick::Message" = type { i32, [4 x i8], [40 x i8] }
+
+declare void @"claw.runtime.print.i32"(i32)
+declare void @llvm.trap()
+
+define internal i32 @"test_backend.choice_pick::inspect"(%"test_backend.choice_pick::Message" %arg.msg) {
+entry:
+  %choice.tag.0 = extractvalue %"test_backend.choice_pick::Message" %arg.msg, 0
+  switch i32 %choice.tag.0, label %entry.defect.pick.0 [
+    i32 0, label %pick_ping_0
+    i32 1, label %pick_data_1
+  ]
+pick_ping_0:
+  ; drop msg : Message
+  ret i32 0
+pick_data_1:
+  %choice.case.addr.1 = alloca %"test_backend.choice_pick::Message"
+  store %"test_backend.choice_pick::Message" %arg.msg, ptr %choice.case.addr.1
+  %choice.payload.slot.2 = getelementptr inbounds %"test_backend.choice_pick::Message", ptr %choice.case.addr.1, i32 0, i32 2
+  %choice.payload.base.3 = getelementptr inbounds [40 x i8], ptr %choice.payload.slot.2, i32 0, i64 0
+  %choice.payload.field.ptr.4 = getelementptr inbounds i8, ptr %choice.payload.base.3, i64 0
+  %choice.payload.field.5 = load %"test_backend.choice_pick::Packet", ptr %choice.payload.field.ptr.4, align 8
+  %choice.payload.field.ptr.6 = getelementptr inbounds i8, ptr %choice.payload.base.3, i64 32
+  %choice.payload.field.7 = load i32, ptr %choice.payload.field.ptr.6, align 4
+  %t0 = extractvalue %"test_backend.choice_pick::Packet" %choice.payload.field.5, 0
+  call void @"claw.runtime.print.i32"(i32 %t0)
+  ; drop packet : Packet
+  ; drop msg : Message
+  ret i32 %choice.payload.field.7
+entry.defect.pick.0:
+  ; defect unreachable_choice "switch reached no matching case"
+  call void @llvm.trap()
+  unreachable
+}

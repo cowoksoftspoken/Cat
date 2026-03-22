@@ -3,7 +3,7 @@ target triple = "x86_64-pc-windows-gnu"
 
 %claw.slice = type { ptr, i64 }
 %claw.buffer = type { ptr, i64, i64 }
-define i32 @"test_backend.branch_compare::delta"(i32 %arg.left, i32 %arg.right) {
+define internal i32 @"test_backend.branch_compare::delta"(i32 %arg.left, i32 %arg.right) {
 entry:
   %t0 = icmp sgt i32 %arg.left, %arg.right
   br i1 %t0, label %when_then_0, label %when_else_1
@@ -15,7 +15,7 @@ when_else_1:
   ret i32 %t2
 }
 
-define i32 @"test_backend.branch_compare::main"() {
+define internal i32 @"test_backend.branch_compare::main"() {
 entry:
   %t0 = call i32 @"test_backend.branch_compare::delta"(i32 9, i32 4)
   ret i32 %t0

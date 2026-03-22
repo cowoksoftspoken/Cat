@@ -643,6 +643,7 @@ pub modules {api, util, runtime}
 
 Rules:
 - `main.cat` is the fixed workspace entry file.
+- root `main.cat` is entry-only and cannot be imported as a module.
 - the root workspace does not need `modules.cat`.
 - non-root folders use `modules.cat` to publish modules outward.
 - `share` controls item visibility inside a realm.

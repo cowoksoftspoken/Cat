@@ -169,6 +169,27 @@ std::string receiverSegment(std::string_view text) {
     return pos == std::string_view::npos ? std::string() : std::string(text.substr(0, pos));
 }
 
+const LayoutVariantInfo* findChoiceVariant(const LirChoice& choice, std::string_view caseName) {
+    if (!choice.layout.has_value()) {
+        return nullptr;
+    }
+    for (const auto& variant : choice.layout->variants) {
+        if (variant.name == caseName) {
+            return &variant;
+        }
+    }
+    return nullptr;
+}
+
+const LirChoiceCase* findChoiceCase(const LirChoice& choice, std::string_view caseName) {
+    for (const auto& item : choice.cases) {
+        if (item.name == caseName) {
+            return &item;
+        }
+    }
+    return nullptr;
+}
+
 bool isSignedIntegerType(std::string_view typeName) {
     return typeName == "Int8" || typeName == "Int16" || typeName == "Int32" || typeName == "Int64" ||
         typeName == "Int128" || typeName == "ISize";
@@ -178,17 +199,125 @@ bool isFloatingType(std::string_view typeName) {
     return typeName == "Float32" || typeName == "Float64";
 }
 
+struct ParsedTypeName {
+    std::string base;
+    std::vector<std::string> args;
+};
+
+size_t roundUpTo(size_t value, size_t align) {
+    return align == 0 ? value : ((value + align - 1) / align) * align;
+}
+
+std::vector<std::string> splitTypeArgs(std::string_view text) {
+    std::vector<std::string> args;
+    size_t start = 0;
+    while (start <= text.size()) {
+        const size_t comma = text.find(',', start);
+        const size_t end = comma == std::string_view::npos ? text.size() : comma;
+        args.push_back(trim(text.substr(start, end - start)));
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+    return args;
+}
+
+ParsedTypeName parseTypeName(std::string_view typeText) {
+    const std::string stripped = trim(stripViewPrefix(typeText));
+    const size_t ofPos = stripped.find(" of ");
+    if (ofPos == std::string::npos) {
+        return ParsedTypeName{stripped, {}};
+    }
+    return ParsedTypeName{trim(stripped.substr(0, ofPos)), splitTypeArgs(trim(stripped.substr(ofPos + 4)))};
+}
+
+std::string joinTypeArgs(const std::vector<std::string>& args) {
+    std::string joined;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i > 0) {
+            joined += ", ";
+        }
+        joined += args[i];
+    }
+    return joined;
+}
+
+std::string substituteTypeText(
+    std::string_view typeText,
+    const std::unordered_map<std::string, std::string>& bindings) {
+    const std::string prefix =
+        typeText.rfind("look ", 0) == 0 ? std::string("look ") :
+        (typeText.rfind("edit ", 0) == 0 ? std::string("edit ") : std::string{});
+    const ParsedTypeName parsed = parseTypeName(typeText);
+    if (parsed.args.empty()) {
+        const auto it = bindings.find(parsed.base);
+        return prefix + (it != bindings.end() ? it->second : parsed.base);
+    }
+
+    std::vector<std::string> substitutedArgs;
+    substitutedArgs.reserve(parsed.args.size());
+    for (const auto& arg : parsed.args) {
+        substitutedArgs.push_back(substituteTypeText(arg, bindings));
+    }
+    return prefix + parsed.base + " of " + joinTypeArgs(substitutedArgs);
+}
+
+std::string choiceStorageType(size_t tagSizeBytes, size_t payloadOffsetBytes, size_t payloadSizeBytes) {
+    std::ostringstream out;
+    out << "{ i" << (tagSizeBytes * 8);
+    const size_t paddingBytes = payloadOffsetBytes > tagSizeBytes ? payloadOffsetBytes - tagSizeBytes : 0;
+    if (paddingBytes > 0) {
+        out << ", [" << paddingBytes << " x i8]";
+    }
+    if (payloadSizeBytes > 0) {
+        out << ", [" << payloadSizeBytes << " x i8]";
+    }
+    out << " }";
+    return out.str();
+}
+
 struct StringConstantInfo {
     std::string globalName;
     std::string arrayType;
     size_t length = 0;
 };
 
+struct PendingChoiceBinding {
+    LirValue source;
+    std::string variantName;
+    std::vector<std::string> bindingNames;
+};
+
+struct ConcreteChoiceCaseInfo {
+    std::string name;
+    std::vector<std::string> payloadTypes;
+    LayoutVariantInfo layout;
+};
+
+struct ConcreteChoiceInfo {
+    std::string typeText;
+    std::string llvmTypeText;
+    size_t tagSizeBytes = 4;
+    size_t payloadOffsetBytes = 0;
+    size_t payloadSizeBytes = 0;
+    size_t sizeBytes = 0;
+    size_t alignBytes = 1;
+    std::vector<ConcreteChoiceCaseInfo> cases;
+};
+
+struct AbiLayout {
+    size_t size = 0;
+    size_t align = 1;
+};
+
 struct FunctionState {
     const LirFunction& function;
     std::unordered_map<std::string, std::string> stackPointers;
     std::unordered_map<std::string, std::string> params;
+    std::unordered_map<std::string, std::string> namedValues;
     std::unordered_map<std::string, std::string> valueTypes;
+    std::unordered_map<std::string, std::vector<PendingChoiceBinding>> pendingChoiceBindings;
     int nextLocal = 0;
     int nextInlineBlock = 0;
 
@@ -233,6 +362,16 @@ private:
     std::string runtimeSymbol(std::string_view callee, const std::string& argType);
     std::string externalSymbol(const LirCallInst& call);
     std::string emitDeclarations();
+    std::optional<AbiLayout> abiLayoutForType(std::string_view typeText) const;
+    std::optional<ConcreteChoiceInfo> resolveChoiceType(std::string_view typeText) const;
+    void materializeChoiceBinding(
+        const PendingChoiceBinding& binding,
+        FunctionState& state,
+        std::vector<std::string>& lines);
+    void materializePendingBlockBindings(
+        std::string_view blockLabel,
+        FunctionState& state,
+        std::vector<std::string>& lines);
     std::string valueTypeForName(std::string_view name, const FunctionState& state) const;
     std::string ensureNamedValue(std::string_view name, FunctionState& state, std::vector<std::string>& lines);
     std::string extractLength(
@@ -246,6 +385,8 @@ private:
         FunctionState& state,
         std::vector<std::string>& lines);
     void emitBoundsCheck(const LirBoundsCheckInst& value, FunctionState& state, std::vector<std::string>& lines);
+    void emitSwitch(const LirSwitchInst& value, FunctionState& state, std::vector<std::string>& lines);
+    bool emitLift(const LirLiftInst& value, FunctionState& state, std::vector<std::string>& lines);
     void emitBuiltinCall(const LirCallInst& value, FunctionState& state, std::vector<std::string>& lines);
     std::string ensureValue(const LirValue& value, FunctionState& state, std::vector<std::string>& lines);
     std::string symbolForDirectCall(std::string_view callee) const;
@@ -304,10 +445,8 @@ std::string LlvmEmitter::llvmType(const std::string& typeText) const {
         shapeIt->second->typeParams.empty()) {
         return quoteType(shapeIt->second->linkage.symbol);
     }
-    const auto choiceIt = choicesByName.find(base);
-    if (choiceIt != choicesByName.end() && choiceIt->second->layout.has_value() && !choiceIt->second->layout->isTemplate &&
-        choiceIt->second->typeParams.empty()) {
-        return quoteType(choiceIt->second->linkage.symbol);
+    if (const auto choice = resolveChoiceType(typeText); choice.has_value()) {
+        return choice->llvmTypeText;
     }
 
     throw std::runtime_error("LLVM lowering does not yet support type '" + typeText + "'.");
@@ -343,6 +482,12 @@ std::string LlvmEmitter::emitTypeDecls() const {
                 }
                 first = false;
                 out << quoteType(choice->linkage.symbol) << " = type { i32";
+                const size_t paddingBytes = choice->layout->payloadOffsetBytes > choice->layout->tagSizeBytes
+                    ? choice->layout->payloadOffsetBytes - choice->layout->tagSizeBytes
+                    : 0;
+                if (paddingBytes > 0) {
+                    out << ", [" << paddingBytes << " x i8]";
+                }
                 if (choice->layout->payloadSizeBytes > 0) {
                     out << ", [" << choice->layout->payloadSizeBytes << " x i8]";
                 }
@@ -506,6 +651,208 @@ std::string LlvmEmitter::emitDeclarations() {
     return out.str();
 }
 
+std::optional<AbiLayout> LlvmEmitter::abiLayoutForType(std::string_view typeText) const {
+    const std::string stripped = trim(stripViewPrefix(typeText));
+    const ParsedTypeName parsed = parseTypeName(stripped);
+    const std::string& base = parsed.base;
+
+    if (base == "Unit") return AbiLayout{0, 1};
+    if (base == "Bool" || base == "Byte" || base == "Int8" || base == "UInt8" || base == "Bits8") return AbiLayout{1, 1};
+    if (base == "Int16" || base == "UInt16" || base == "Bits16") return AbiLayout{2, 2};
+    if (base == "Rune" || base == "Int32" || base == "UInt32" || base == "Bits32" || base == "Float32") return AbiLayout{4, 4};
+    if (base == "Int64" || base == "UInt64" || base == "Bits64" || base == "USize" || base == "ISize" || base == "Float64") {
+        return AbiLayout{8, 8};
+    }
+    if (base == "Int128" || base == "UInt128" || base == "Bits128") return AbiLayout{16, 16};
+    if (base == "Text" || base == "Span") return AbiLayout{16, 8};
+    if (base == "Bytes") return AbiLayout{24, 8};
+    if (base == "Addr" || base == "RawPtr" || base == "RawMut" || base == "Fn" || base == "CStr" ||
+        base == "OwnedCStr" || base == "Arena" || base == "Pool" || base == "Anchor" || base == "Table" ||
+        base == "Set" || base == "Heap" || base == "Ring") {
+        return AbiLayout{8, 8};
+    }
+
+    const auto shapeIt = shapesByName.find(base);
+    if (shapeIt != shapesByName.end() && shapeIt->second->layout.has_value() && !shapeIt->second->layout->isTemplate &&
+        shapeIt->second->typeParams.empty()) {
+        return AbiLayout{shapeIt->second->layout->sizeBytes, shapeIt->second->layout->alignBytes};
+    }
+
+    if (const auto choice = resolveChoiceType(typeText); choice.has_value()) {
+        return AbiLayout{choice->sizeBytes, choice->alignBytes};
+    }
+
+    return std::nullopt;
+}
+
+std::optional<ConcreteChoiceInfo> LlvmEmitter::resolveChoiceType(std::string_view typeText) const {
+    const ParsedTypeName parsed = parseTypeName(typeText);
+    const auto it = choicesByName.find(parsed.base);
+    if (it == choicesByName.end()) {
+        return std::nullopt;
+    }
+
+    const auto* choice = it->second;
+    if (!choice->layout.has_value()) {
+        return std::nullopt;
+    }
+
+    ConcreteChoiceInfo info;
+    info.typeText = trim(stripViewPrefix(typeText));
+    info.tagSizeBytes = choice->layout->tagSizeBytes == 0 ? 4 : choice->layout->tagSizeBytes;
+
+    if (choice->typeParams.empty()) {
+        if (choice->layout->isTemplate) {
+            return std::nullopt;
+        }
+        info.llvmTypeText = quoteType(choice->linkage.symbol);
+        info.payloadOffsetBytes = choice->layout->payloadOffsetBytes;
+        info.payloadSizeBytes = choice->layout->payloadSizeBytes;
+        info.sizeBytes = choice->layout->sizeBytes;
+        info.alignBytes = choice->layout->alignBytes;
+        info.cases.reserve(choice->cases.size());
+        for (size_t i = 0; i < choice->cases.size(); ++i) {
+            ConcreteChoiceCaseInfo caseInfo;
+            caseInfo.name = choice->cases[i].name;
+            caseInfo.payloadTypes = choice->cases[i].payloadTypes;
+            if (i < choice->layout->variants.size()) {
+                caseInfo.layout = choice->layout->variants[i];
+            }
+            info.cases.push_back(std::move(caseInfo));
+        }
+        return info;
+    }
+
+    if (parsed.args.size() != choice->typeParams.size()) {
+        throw std::runtime_error(
+            "LLVM lowering expected " + std::to_string(choice->typeParams.size()) +
+            " type argument(s) for choice '" + parsed.base + "', got " + std::to_string(parsed.args.size()) + ".");
+    }
+
+    std::unordered_map<std::string, std::string> bindings;
+    for (size_t i = 0; i < choice->typeParams.size(); ++i) {
+        bindings[choice->typeParams[i]] = parsed.args[i];
+    }
+
+    size_t maxPayloadSize = 0;
+    size_t maxPayloadAlign = 1;
+    info.cases.reserve(choice->cases.size());
+    for (const auto& item : choice->cases) {
+        ConcreteChoiceCaseInfo caseInfo;
+        caseInfo.name = item.name;
+        size_t nextOffset = 0;
+        size_t variantAlign = 1;
+        for (size_t payloadIndex = 0; payloadIndex < item.payloadTypes.size(); ++payloadIndex) {
+            const std::string payloadType = substituteTypeText(item.payloadTypes[payloadIndex], bindings);
+            const auto layout = abiLayoutForType(payloadType);
+            if (!layout.has_value()) {
+                throw std::runtime_error(
+                    "LLVM lowering does not yet support payload type '" + payloadType +
+                    "' in concrete choice '" + info.typeText + "'.");
+            }
+            nextOffset = roundUpTo(nextOffset, layout->align);
+            caseInfo.payloadTypes.push_back(payloadType);
+            caseInfo.layout.payloadFields.push_back(LayoutFieldInfo{
+                "payload" + std::to_string(payloadIndex),
+                ResolvedType{},
+                nextOffset,
+                layout->size,
+                layout->align,
+            });
+            nextOffset += layout->size;
+            variantAlign = std::max(variantAlign, layout->align);
+        }
+        caseInfo.layout.name = item.name;
+        caseInfo.layout.payloadSizeBytes = roundUpTo(nextOffset, variantAlign);
+        caseInfo.layout.payloadAlignBytes = variantAlign;
+        maxPayloadSize = std::max(maxPayloadSize, caseInfo.layout.payloadSizeBytes);
+        maxPayloadAlign = std::max(maxPayloadAlign, caseInfo.layout.payloadAlignBytes);
+        info.cases.push_back(std::move(caseInfo));
+    }
+
+    info.alignBytes = std::max(info.tagSizeBytes, maxPayloadAlign);
+    info.payloadOffsetBytes = roundUpTo(info.tagSizeBytes, maxPayloadAlign);
+    info.payloadSizeBytes = maxPayloadSize;
+    info.sizeBytes = roundUpTo(info.payloadOffsetBytes + info.payloadSizeBytes, info.alignBytes);
+    info.llvmTypeText = choiceStorageType(info.tagSizeBytes, info.payloadOffsetBytes, info.payloadSizeBytes);
+    for (auto& item : info.cases) {
+        item.layout.payloadOffsetBytes = info.payloadOffsetBytes;
+    }
+    return info;
+}
+
+void LlvmEmitter::materializeChoiceBinding(
+    const PendingChoiceBinding& binding,
+    FunctionState& state,
+    std::vector<std::string>& lines) {
+    const auto choice = resolveChoiceType(binding.source.type);
+    if (!choice.has_value()) {
+        throw std::runtime_error("LLVM lowering does not yet support choice bindings for type '" + binding.source.type + "'.");
+    }
+
+    const auto caseIt = std::find_if(choice->cases.begin(), choice->cases.end(), [&](const ConcreteChoiceCaseInfo& item) {
+        return item.name == binding.variantName;
+    });
+    if (caseIt == choice->cases.end()) {
+        throw std::runtime_error("LLVM lowering could not resolve choice variant '" + binding.variantName + "'.");
+    }
+    if (binding.bindingNames.size() != caseIt->payloadTypes.size() ||
+        binding.bindingNames.size() != caseIt->layout.payloadFields.size()) {
+        throw std::runtime_error("LLVM lowering found mismatched payload binding information for variant '" + binding.variantName + "'.");
+    }
+    if (binding.bindingNames.empty()) {
+        return;
+    }
+    if (choice->payloadSizeBytes == 0) {
+        throw std::runtime_error("LLVM lowering expected payload storage for bound choice variant '" + binding.variantName + "'.");
+    }
+
+    const std::string sourceValue = ensureValue(binding.source, state, lines);
+    const std::string choiceAddr = state.temp("choice.case.addr");
+    lines.push_back("  " + choiceAddr + " = alloca " + choice->llvmTypeText);
+    lines.push_back("  store " + choice->llvmTypeText + " " + sourceValue + ", ptr " + choiceAddr);
+
+    const size_t paddingBytes = choice->payloadOffsetBytes > choice->tagSizeBytes
+        ? choice->payloadOffsetBytes - choice->tagSizeBytes
+        : 0;
+    const int payloadFieldIndex = paddingBytes > 0 ? 2 : 1;
+    const std::string payloadArrayType = "[" + std::to_string(choice->payloadSizeBytes) + " x i8]";
+    const std::string payloadSlot = state.temp("choice.payload.slot");
+    lines.push_back(
+        "  " + payloadSlot + " = getelementptr inbounds " + choice->llvmTypeText + ", ptr " + choiceAddr +
+        ", i32 0, i32 " + std::to_string(payloadFieldIndex));
+    const std::string payloadBase = state.temp("choice.payload.base");
+    lines.push_back("  " + payloadBase + " = getelementptr inbounds " + payloadArrayType + ", ptr " + payloadSlot + ", i32 0, i64 0");
+
+    for (size_t i = 0; i < binding.bindingNames.size(); ++i) {
+        const auto& layoutField = caseIt->layout.payloadFields[i];
+        const std::string fieldPtr = state.temp("choice.payload.field.ptr");
+        lines.push_back(
+            "  " + fieldPtr + " = getelementptr inbounds i8, ptr " + payloadBase +
+            ", i64 " + std::to_string(layoutField.offsetBytes));
+        const std::string loadedValue = state.temp("choice.payload.field");
+        lines.push_back(
+            "  " + loadedValue + " = load " + llvmType(caseIt->payloadTypes[i]) + ", ptr " + fieldPtr +
+            ", align " + std::to_string(layoutField.alignBytes));
+        state.namedValues[binding.bindingNames[i]] = loadedValue;
+        state.valueTypes[binding.bindingNames[i]] = caseIt->payloadTypes[i];
+    }
+}
+
+void LlvmEmitter::materializePendingBlockBindings(
+    std::string_view blockLabel,
+    FunctionState& state,
+    std::vector<std::string>& lines) {
+    const auto it = state.pendingChoiceBindings.find(std::string(blockLabel));
+    if (it == state.pendingChoiceBindings.end()) {
+        return;
+    }
+
+    for (const auto& binding : it->second) {
+        materializeChoiceBinding(binding, state, lines);
+    }
+}
+
 std::string LlvmEmitter::valueTypeForName(std::string_view name, const FunctionState& state) const {
     const auto it = state.valueTypes.find(std::string(name));
     return it != state.valueTypes.end() ? it->second : std::string();
@@ -609,6 +956,77 @@ void LlvmEmitter::emitBoundsCheck(const LirBoundsCheckInst& value, FunctionState
     }
 
     throw std::runtime_error("LLVM lowering does not yet support bounds_check kind '" + value.kind + "'.");
+}
+
+void LlvmEmitter::emitSwitch(const LirSwitchInst& value, FunctionState& state, std::vector<std::string>& lines) {
+    const auto choice = resolveChoiceType(value.value.type);
+    if (!choice.has_value()) {
+        throw std::runtime_error("LLVM lowering does not yet support switch over choice type '" + value.value.type + "'.");
+    }
+
+    const std::string switchValue = ensureValue(value.value, state, lines);
+    const std::string tagValue = state.temp("choice.tag");
+    lines.push_back("  " + tagValue + " = extractvalue " + choice->llvmTypeText + " " + switchValue + ", 0");
+    lines.push_back("  switch i32 " + tagValue + ", label %" + blockLabel(value.defectLabel) + " [");
+
+    for (const auto& item : value.cases) {
+        size_t tagIndex = choice->cases.size();
+        for (size_t i = 0; i < choice->cases.size(); ++i) {
+            if (choice->cases[i].name == item.tag) {
+                tagIndex = i;
+                break;
+            }
+        }
+        if (tagIndex == choice->cases.size()) {
+            throw std::runtime_error("LLVM lowering could not resolve switch tag '" + item.tag + "' in choice '" + value.value.type + "'.");
+        }
+
+        state.pendingChoiceBindings[item.targetLabel].push_back(PendingChoiceBinding{value.value, item.tag, item.bindings});
+        lines.push_back("    i32 " + std::to_string(tagIndex) + ", label %" + blockLabel(item.targetLabel));
+    }
+
+    lines.push_back("  ]");
+}
+
+bool LlvmEmitter::emitLift(const LirLiftInst& value, FunctionState& state, std::vector<std::string>& lines) {
+    const auto choice = resolveChoiceType(value.value.type);
+    if (!choice.has_value()) {
+        throw std::runtime_error("LLVM lowering does not yet support lift over type '" + value.value.type + "'.");
+    }
+
+    const auto okIt = std::find_if(choice->cases.begin(), choice->cases.end(), [](const ConcreteChoiceCaseInfo& item) {
+        return item.name == "ok";
+    });
+    const auto failIt = std::find_if(choice->cases.begin(), choice->cases.end(), [](const ConcreteChoiceCaseInfo& item) {
+        return item.name == "fail";
+    });
+    if (okIt == choice->cases.end() || failIt == choice->cases.end()) {
+        throw std::runtime_error("LLVM lowering requires lift choices to define ok(...) and fail(...) variants for type '" + value.value.type + "'.");
+    }
+    if (okIt->payloadTypes.size() != 1 || failIt->payloadTypes.size() != 1) {
+        throw std::runtime_error("LLVM lowering currently requires lift variants ok(...) and fail(...) to carry exactly one payload each for type '" + value.value.type + "'.");
+    }
+
+    const std::string liftedValue = ensureValue(value.value, state, lines);
+    const std::string tagValue = state.temp("lift.tag");
+    lines.push_back("  " + tagValue + " = extractvalue " + choice->llvmTypeText + " " + liftedValue + ", 0");
+
+    const size_t okIndex = static_cast<size_t>(std::distance(choice->cases.begin(), okIt));
+    const std::string checkValue = state.temp("lift.is_ok");
+    const std::string successLabel = value.successLabel.empty() ? state.inlineLabel("lift.ok") : blockLabel(value.successLabel);
+    const std::string failLabel = blockLabel(value.failLabel);
+    lines.push_back("  " + checkValue + " = icmp eq i32 " + tagValue + ", " + std::to_string(okIndex));
+    lines.push_back("  br i1 " + checkValue + ", label %" + successLabel + ", label %" + failLabel);
+
+    state.pendingChoiceBindings[value.failLabel].push_back(PendingChoiceBinding{value.value, "fail", {value.failName}});
+    if (!value.successLabel.empty()) {
+        state.pendingChoiceBindings[value.successLabel].push_back(PendingChoiceBinding{value.value, "ok", {value.okName}});
+        return true;
+    }
+
+    lines.push_back(successLabel + ":");
+    materializeChoiceBinding(PendingChoiceBinding{value.value, "ok", {value.okName}}, state, lines);
+    return false;
 }
 
 void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state, std::vector<std::string>& lines) {
@@ -739,6 +1157,10 @@ std::string LlvmEmitter::ensureValue(const LirValue& value, FunctionState& state
         return loadReg;
     }
 
+    if (const auto it = state.namedValues.find(value.text); it != state.namedValues.end()) {
+        return it->second;
+    }
+
     if (const auto it = state.params.find(value.text); it != state.params.end()) {
         return it->second;
     }
@@ -774,6 +1196,18 @@ std::string LlvmEmitter::symbolForDirectCall(std::string_view callee) const {
     throw std::runtime_error("Unable to resolve direct call target '" + std::string(callee) + "' in LLVM lowering.");
 }
 
+std::string llvmFunctionLinkage(const SymbolLinkInfo& linkage) {
+    switch (linkage.linkage) {
+    case LinkageKind::Internal:
+        return "internal ";
+    case LinkageKind::Shared:
+    case LinkageKind::Runtime:
+    case LinkageKind::External:
+        return {};
+    }
+    return {};
+}
+
 std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
     FunctionState state{fn};
     for (const auto& param : fn.params) {
@@ -782,7 +1216,8 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
     }
 
     std::ostringstream out;
-    out << "define " << llvmType(fn.returnType) << " " << quoteGlobal(fn.linkage.symbol) << "(";
+    out << "define " << llvmFunctionLinkage(fn.linkage) << llvmType(fn.returnType) << " "
+        << quoteGlobal(fn.linkage.symbol) << "(";
     for (size_t i = 0; i < fn.params.size(); ++i) {
         if (i > 0) {
             out << ", ";
@@ -796,6 +1231,7 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
         out << blockLabel(block.label) << ":\n";
         bool hasTerminator = false;
         std::vector<std::string> blockLines;
+        materializePendingBlockBindings(block.label, state, blockLines);
 
         for (const auto& inst : block.insts) {
             std::visit(Overloaded{
@@ -978,11 +1414,14 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
                 [&](const LirIterNextInst&) {
                     throw std::runtime_error("LLVM lowering does not yet support iter_next.");
                 },
-                [&](const LirSwitchInst&) {
-                    throw std::runtime_error("LLVM lowering does not yet support switch over choice values.");
+                [&](const LirSwitchInst& value) {
+                    emitSwitch(value, state, blockLines);
+                    hasTerminator = true;
                 },
-                [&](const LirLiftInst&) {
-                    throw std::runtime_error("LLVM lowering does not yet support lift.");
+                [&](const LirLiftInst& value) {
+                    if (emitLift(value, state, blockLines)) {
+                        hasTerminator = true;
+                    }
                 },
                 [&](const LirBreakInst&) {
                     throw std::runtime_error("LLVM lowering does not yet support break lowering yet.");

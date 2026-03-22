@@ -549,7 +549,7 @@ std::optional<size_t> lowerStmt(
     if (auto* lift = dynamic_cast<const LiftStmt*>(stmt)) {
         const OirValue value = lowerExpr(sema, lift->expr.get(), context, currentBlockIndex);
         const std::string failLabel = context.blockName("lift_fail");
-        appendInst(context, currentBlockIndex, OirLiftInst{value, lift->valueName, failLabel});
+        appendInst(context, currentBlockIndex, OirLiftInst{value, lift->valueName, lift->failName, failLabel});
         lowerBlock(sema, ownership, lift->failBlock.get(), failLabel, context, {}, emitter);
         return currentBlockIndex;
     }
@@ -661,8 +661,8 @@ std::string formatInst(const OirInst& inst, int indent) {
         },
         [&](const OirLiftInst& value) {
             std::ostringstream out;
-            out << pad << "lift " << formatValue(value.value) << " -> " << value.okName << ", fail "
-                << value.failLabel << "\n";
+            out << pad << "lift " << formatValue(value.value) << " -> " << value.okName
+                << ", fail " << value.failName << " -> " << value.failLabel << "\n";
             return out.str();
         },
         [&](const OirStopInst& value) {

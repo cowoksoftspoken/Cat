@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "analysis/ownership.h"
+#include "ast/ast.h"
 #include "analysis/sema.h"
 #include "backend/llvm_ir.h"
 #include "diagnostics/diagnostics.h"
@@ -183,14 +184,81 @@ std::vector<claw::frontend::Diagnostic> attachPath(
     return diagnostics;
 }
 
+bool isRootMainEntryUnit(
+    const claw::frontend::LoadedProject& project,
+    const claw::frontend::LoadedUnit& unit) {
+    return project.structuredPackage &&
+        unit.path.filename() == "main.cat" &&
+        unit.path.parent_path().lexically_normal() == project.packageRoot.lexically_normal();
+}
+
+std::vector<claw::frontend::Diagnostic> collectProjectWarnings(
+    const claw::frontend::LoadedProject& project) {
+    std::vector<claw::frontend::Diagnostic> warnings;
+    if (project.units.empty()) {
+        return warnings;
+    }
+
+    const auto& unit = project.units[project.entryIndex];
+    if (!isRootMainEntryUnit(project, unit) || !unit.ast) {
+        return warnings;
+    }
+
+    for (const auto& decl : unit.ast->declarations) {
+        if (!decl || !decl->isShared) {
+            continue;
+        }
+
+        std::string name = "<decl>";
+        std::string kind = "declaration";
+        if (const auto* fn = dynamic_cast<const claw::frontend::FnDecl*>(decl.get())) {
+            name = fn->name;
+            kind = "function";
+        } else if (const auto* shape = dynamic_cast<const claw::frontend::ShapeDecl*>(decl.get())) {
+            name = shape->name;
+            kind = "shape";
+        } else if (const auto* choice = dynamic_cast<const claw::frontend::ChoiceDecl*>(decl.get())) {
+            name = choice->name;
+            kind = "choice";
+        }
+
+        claw::frontend::Diagnostic diagnostic;
+        diagnostic.severity = claw::frontend::DiagnosticSeverity::Warning;
+        diagnostic.stage = "module";
+        diagnostic.message =
+            "Shared " + kind + " '" + name + "' in root main.cat has no effect because the workspace entry is not importable as a module.";
+        diagnostic.span = decl->span;
+        diagnostic.path = unit.path.string();
+        warnings.push_back(std::move(diagnostic));
+    }
+
+    return warnings;
+}
+
+void neutralizeRootEntrySharedDecls(claw::frontend::LoadedProject& project) {
+    if (project.units.empty()) {
+        return;
+    }
+
+    auto& unit = project.units[project.entryIndex];
+    if (!isRootMainEntryUnit(project, unit) || !unit.ast) {
+        return;
+    }
+
+    for (auto& decl : unit.ast->declarations) {
+        if (!decl || !decl->isShared) {
+            continue;
+        }
+        decl->isShared = false;
+    }
+}
+
 void validateEntryPoint(
     const claw::frontend::LoadedProject& project,
     const claw::frontend::SemanticAnalyzer& sema,
     bool requireEntry) {
     const auto& unit = project.units[project.entryIndex];
-    const bool isRootMainEntry = project.structuredPackage &&
-        unit.path.filename() == "main.cat" &&
-        unit.path.parent_path().lexically_normal() == project.packageRoot.lexically_normal();
+    const bool isRootMainEntry = isRootMainEntryUnit(project, unit);
 
     if (!requireEntry && !isRootMainEntry) {
         return;
@@ -272,6 +340,12 @@ int main(int argc, char** argv) {
     try {
         claw::frontend::ProjectLoader loader;
         auto project = loader.load(openedPath.empty() ? std::filesystem::path(filepath) : openedPath);
+
+        const auto warnings = collectProjectWarnings(project);
+        if (!warnings.empty()) {
+            std::cerr << formatDiagnosticsWithSources(warnings, diagnosticPath, source) << "\n";
+        }
+        neutralizeRootEntrySharedDecls(project);
 
         std::vector<std::unique_ptr<claw::frontend::SemanticAnalyzer>> analyzers;
         analyzers.reserve(project.units.size());

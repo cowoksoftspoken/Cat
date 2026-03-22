@@ -90,9 +90,11 @@ private:
     std::filesystem::path resolveWorkspaceEntryPath(const std::filesystem::path& workspaceRoot) const;
     std::optional<std::filesystem::path> tryResolveRealmFile(const std::vector<std::string>& segments);
     std::optional<std::filesystem::path> tryResolveNamespaceDir(const std::vector<std::string>& segments);
-    std::filesystem::path resolveSiblingModule(const std::filesystem::path& importerPath, const std::string& name);
+    std::filesystem::path resolveSiblingModule(const std::filesystem::path& importerPath, const std::string& name, SourceSpan span = {});
     std::vector<std::string> splitRealmPath(const std::string& realmPath) const;
     bool isExternalRoot(const std::vector<std::string>& segments) const;
+    bool isWorkspaceEntrySource(const std::filesystem::path& path) const;
+    bool refersToWorkspaceEntryRealm(const std::vector<std::string>& segments) const;
     void throwDiagnostic(
         const std::filesystem::path& path,
         const std::string& stage,
