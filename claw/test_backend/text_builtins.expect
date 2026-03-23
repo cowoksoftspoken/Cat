@@ -1,11 +1,11 @@
 ; ModuleID = 'claw'
-target triple = "x86_64-pc-windows-gnu"
+target triple = "x86_64-w64-windows-gnu"
 
 %claw.slice = type { ptr, i64 }
 %claw.buffer = type { ptr, i64, i64 }
 @.str.0 = private unnamed_addr constant [5 x i8] c"claw\00"
 
-declare void @"claw.runtime.print.slice"(%claw.slice)
+declare void @"claw.runtime.print.slice"(ptr)
 declare void @"claw.runtime.print.i8"(i8)
 declare void @"claw.runtime.print.i64"(i64)
 declare void @llvm.trap()
@@ -40,18 +40,17 @@ prefix_len.bounds.ok.0:
   %text.slice.ptr.5 = getelementptr inbounds i8, ptr %text.ptr.4, i64 0
   %text.slice.base.6 = insertvalue %claw.slice poison, ptr %text.slice.ptr.5, 0
   %t0 = insertvalue %claw.slice %text.slice.base.6, i64 2, 1
-  %prefix.addr = alloca %claw.slice
-  store %claw.slice %t0, ptr %prefix.addr
-  %prefix.load.7 = load %claw.slice, ptr %prefix.addr
-  call void @"claw.runtime.print.slice"(%claw.slice %prefix.load.7)
-  %text.len.8 = extractvalue %claw.slice %arg.text, 1
-  %t1 = icmp eq i64 %text.len.8, 0
+  %prefix.addr = alloca %claw.slice, align 8
+  store %claw.slice %t0, ptr %prefix.addr, align 8
+  call void @"claw.runtime.print.slice"(ptr %prefix.addr)
+  %text.len.7 = extractvalue %claw.slice %arg.text, 1
+  %t1 = icmp eq i64 %text.len.7, 0
   br i1 %t1, label %when_then_0, label %when_else_1
 when_then_0:
   ret i64 0
 when_else_1:
-  %text.len.9 = extractvalue %claw.slice %arg.text, 1
-  %t2 = add i64 0, %text.len.9
+  %text.len.8 = extractvalue %claw.slice %arg.text, 1
+  %t2 = add i64 0, %text.len.8
   ret i64 %t2
 entry.defect.bounds.0:
   ; defect bounds "slice requires in-range access"
@@ -73,3 +72,4 @@ entry:
   call void @"claw.runtime.print.i64"(i64 %t1)
   ret i32 0
 }
+

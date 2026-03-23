@@ -1,0 +1,38 @@
+; ModuleID = 'claw'
+target triple = "x86_64-w64-windows-gnu"
+
+%claw.slice = type { ptr, i64 }
+%claw.buffer = type { ptr, i64, i64 }
+%"test_backend.aggregate_abi::Header" = type { i16, i16 }
+
+%"test_backend.aggregate_abi::Packet" = type { i32, %"test_backend.aggregate_abi::Header", %claw.buffer }
+
+define internal void @"test_backend.aggregate_abi::echo"(ptr %ret.slot, ptr %arg.packet.addr) {
+entry:
+  %load.0 = load %"test_backend.aggregate_abi::Packet", ptr %arg.packet.addr, align 8
+  store %"test_backend.aggregate_abi::Packet" %load.0, ptr %ret.slot, align 8
+  ret void
+}
+
+define internal i32 @"test_backend.aggregate_abi::next_seq"(ptr %arg.packet.addr) {
+entry:
+  %call.ret.addr.0 = alloca %"test_backend.aggregate_abi::Packet", align 8
+  call void @"test_backend.aggregate_abi::echo"(ptr %call.ret.addr.0, ptr %arg.packet.addr)
+  %copy.addr = alloca %"test_backend.aggregate_abi::Packet", align 8
+  %load.1 = load %"test_backend.aggregate_abi::Packet", ptr %call.ret.addr.0, align 8
+  store %"test_backend.aggregate_abi::Packet" %load.1, ptr %copy.addr, align 8
+  %field.ptr.2 = getelementptr inbounds %"test_backend.aggregate_abi::Packet", ptr %copy.addr, i32 0, i32 0
+  %t1 = load i32, ptr %field.ptr.2, align 4
+  ; drop copy : Packet
+  ret i32 %t1
+}
+
+define internal i16 @"test_backend.aggregate_abi::patch"(ptr %arg.header.addr, i16 %arg.value) {
+entry:
+  %field.ptr.0 = getelementptr inbounds %"test_backend.aggregate_abi::Header", ptr %arg.header.addr, i32 0, i32 0
+  store i16 %arg.value, ptr %field.ptr.0, align 2
+  %field.ptr.1 = getelementptr inbounds %"test_backend.aggregate_abi::Header", ptr %arg.header.addr, i32 0, i32 0
+  %t0 = load i16, ptr %field.ptr.1, align 2
+  ret i16 %t0
+}
+

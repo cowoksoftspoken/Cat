@@ -1,0 +1,7 @@
+realm main
+
+fn main() -> Int32 {
+    println("hello")
+    print(7)
+    give 0
+}

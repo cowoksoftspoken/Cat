@@ -10,7 +10,7 @@ Claw is an experimental systems programming language and compiler project built 
 
 ## Current Status
 
-Claw is currently at the **hardened frontend + first LLVM backend entry** stage.
+Claw is currently at the **hardened frontend + first LLVM backend + initial native executable path** stage.
 
 Implemented today:
 - lexer and parser for the current Claw syntax direction
@@ -38,7 +38,9 @@ Implemented today:
 - folder module publishing through `modules.cat`
 - project config loading from `claw.toml`
 - AIR, OIR, LIR, and initial LLVM IR textual emission for inspected lowering stages
+- LLVM backend split across internal backend units instead of continuing as one monolithic emitter file
 - separate frontend and backend regression suites
+- initial `build-native` support that can compile the current supported subset into Windows `.exe` files through `clang` plus a bundled runtime shim
 
 Validated environment:
 - MSYS2 UCRT64
@@ -46,6 +48,7 @@ Validated environment:
 - LLVM toolchain available through MSYS2 UCRT64
 - frontend regression runner in `test/run_frontend_tests.sh`
 - backend regression runner in `test_backend/run_backend_tests.sh`
+- native integration runner in `test_native/run_native_tests.sh`
 
 ## What Works Right Now
 
@@ -75,7 +78,12 @@ The initial LLVM backend is already alive for a strict subset:
 - explicit LLVM lowering for the current `bounds_check` path into branch-to-defect flow
 - concrete `pick` lowering for closed choices, including tag-based `switch`, payload extraction, and defect edges for unreachable choice states
 - initial `lift` lowering for concrete `Outcome of T, E`, including success/fail payload extraction and checked branch splitting in LLVM IR
+- ABI-accurate direct Claw aggregate lowering for current `indirect` shape paths, including hidden return slots, pointer-based aggregate parameters, and object stack slots
+- concrete shape field load/store lowering, including `store_field` for addressable objects such as `edit` views and aggregate locals
+- iterator lowering for the current slice-like iterables (`Span`, `Text`, `Bytes`) and direct loop-control lowering for `break` / `continue`
+- explicit backend rejection for raw-only / opaque external calls that have not yet been given a lowerable LLVM contract
 - textual LLVM IR emission through `claw emit-llvm ...`
+- initial native executable generation through `claw build-native ...`, validated today for the current supported subset including runtime printing, unit-return `main`, and imported direct calls
 
 Backend bring-up is validated today by assembling emitted IR with `llvm-as` and lowering it with `llc` for the current backend fixtures.
 
@@ -88,7 +96,7 @@ Important missing pieces:
 - fuller typed raw / FFI contracts for memory operations, effects, and non-function boundaries
 - richer ownership precision across more complex aliasing cases
 - concurrency-related safety checks such as `sendable` / `shareable`
-- optimization passes, executable linking flow, and runtime integration beyond the current subset
+- optimization passes, broader native/link coverage, and richer runtime integration beyond the current Windows GNU subset
 
 So while the frontend is hard and the first LLVM path is now alive, the language should still not yet be described as fully Rust-level safe or production-complete.
 
@@ -121,10 +129,10 @@ term = { version = "1.0.0", abi = "claw", emit = "raw fn emit(message: look Text
 The correct order from here is:
 
 1. Expand LLVM lowering coverage on top of the current LIR contract.
-2. Lower canonical layouts, linkage, drops, bounds checks, `pick`, and `lift` more completely into LLVM IR.
+2. Deepen LLVM lowering for richer aggregate cases and deeper `lift` / `pick` paths now that the first aggregate ABI layer plus loop/iterator control are alive.
 3. Tighten typed raw / FFI contracts for memory operations, effects, and pointer-oriented boundaries in parallel with backend work.
 4. Expand builtin method coverage only where dispatch stays compile-time, borrow soundness remains intact, and cost remains explicit.
-5. Add concurrency-oriented safety layers and later optimizations after the first end-to-end native pipeline is alive.
+5. Harden and widen the native executable path across richer runtime, aggregate, and FFI cases before later optimization work.
 
 ## Additional Planned Type Work
 
@@ -166,6 +174,7 @@ claw emit-air path/to/file.cat
 claw emit-oir path/to/file.cat
 claw emit-lir path/to/file.cat
 claw emit-llvm path/to/file.cat
+claw build-native path/to/workspace
 ```
 
 ## Repository Layout
@@ -185,4 +194,5 @@ claw emit-llvm path/to/file.cat
 
 Claw now has a hard frontend foundation: parser, diagnostics, semantic analysis, ownership checks, definite initialization checks, workspace structure, typed external boundaries, canonical layout metadata, and backend-facing OIR/LIR.
 
-The project has also crossed the first backend threshold: LLVM emission exists, backend fixtures are separated from frontend fixtures, and the current subset already assembles through LLVM tools. The next job is to deepen that backend coverage without weakening the `Fast, Safe, Simple` contract.
+The project has also crossed the first backend threshold: LLVM emission exists, backend fixtures are separated from frontend fixtures, the current subset already assembles through LLVM tools, and the current supported subset can now build and run native Windows executables. The next job is to deepen that backend and native coverage without weakening the `Fast, Safe, Simple` contract.
+

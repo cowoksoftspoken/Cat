@@ -1,0 +1,5 @@
+realm app.math
+
+share fn answer() -> Int32 {
+    give 7
+}

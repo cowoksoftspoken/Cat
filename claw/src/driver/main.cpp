@@ -13,6 +13,7 @@
 #include "analysis/sema.h"
 #include "backend/llvm_ir.h"
 #include "diagnostics/diagnostics.h"
+#include "driver/native_build.h"
 #include "ir/air.h"
 #include "ir/oir.h"
 #include "ir/lir.h"
@@ -38,6 +39,11 @@ std::string maybeConvertMsysPath(std::string_view rawPath) {
     }
 
     return converted;
+}
+
+std::filesystem::path resolveOutputPath(std::string_view rawPath) {
+    const std::string msysConverted = maybeConvertMsysPath(rawPath);
+    return std::filesystem::path(msysConverted.empty() ? std::string(rawPath) : msysConverted);
 }
 
 std::vector<std::filesystem::path> buildCandidatePaths(const std::string& rawPath) {
@@ -298,28 +304,29 @@ void validateEntryPoint(
     }
 }
 void printUsage() {
-    std::cout << "Usage: claw <command> <file.cat|workspace|config>\n"
+    std::cout << "Usage: claw <command> <file.cat|workspace|config> [output.exe]\n"
               << "Commands:\n"
-              << "  check      Parse and validate semantics + ownership\n"
-              << "  emit-air   Emit analyzed IR view after semantic analysis\n"
-              << "  emit-oir   Emit lowered OIR view closer to backend\n"
-              << "  emit-lir   Emit backend-facing lowering IR derived from OIR\n"
-              << "  emit-llvm  Emit initial LLVM IR lowered from LIR\n"
-              << "  build      Validate a workspace entry graph rooted at main.cat\n";
+              << "  check         Parse and validate semantics + ownership\n"
+              << "  emit-air      Emit analyzed IR view after semantic analysis\n"
+              << "  emit-oir      Emit lowered OIR view closer to backend\n"
+              << "  emit-lir      Emit backend-facing lowering IR derived from OIR\n"
+              << "  emit-llvm     Emit initial LLVM IR lowered from LIR\n"
+              << "  build         Validate a workspace entry graph rooted at main.cat\n"
+              << "  build-native  Compile a validated entry graph into a native executable\n";
 }
-
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 3) {
+    if (argc < 3 || argc > 4) {
         printUsage();
         return 1;
     }
 
     const std::string command = argv[1];
     const std::string filepath = argv[2];
+    const std::string outputArg = argc >= 4 ? argv[3] : std::string{};
 
-    if (command != "check" && command != "build" && command != "emit-air" && command != "emit-oir" && command != "emit-lir" && command != "emit-llvm") {
+    if (command != "check" && command != "build" && command != "build-native" && command != "emit-air" && command != "emit-oir" && command != "emit-lir" && command != "emit-llvm") {
         std::cerr << "Unknown command: " << command << "\n";
         printUsage();
         return 1;
@@ -360,7 +367,7 @@ int main(int argc, char** argv) {
             analyzers.push_back(std::move(sema));
         }
 
-        validateEntryPoint(project, *analyzers[project.entryIndex], command == "build");
+        validateEntryPoint(project, *analyzers[project.entryIndex], command == "build" || command == "build-native");
 
         if (command == "emit-air") {
             claw::frontend::AirEmitter air(*analyzers[project.entryIndex]);
@@ -380,7 +387,7 @@ int main(int argc, char** argv) {
             ownershipCheckers.push_back(std::move(ownership));
         }
 
-        if (command == "emit-oir" || command == "emit-lir" || command == "emit-llvm") {
+        if (command == "emit-oir" || command == "emit-lir" || command == "emit-llvm" || command == "build-native") {
             std::vector<claw::frontend::OirUnitView> units;
             units.reserve(project.units.size());
             for (size_t i = 0; i < project.units.size(); ++i) {
@@ -407,7 +414,7 @@ int main(int argc, char** argv) {
                     const claw::frontend::OirProgram program{entryRealm, entryRealm + "::main", {oir.lowerRealm(project.units[project.entryIndex].ast.get())}};
                     std::cout << claw::frontend::emitLirProgram(program);
                 }
-            } else {
+            } else if (command == "emit-llvm") {
                 if (emitWholeProject) {
                     std::cout << claw::frontend::emitLlvmIr(project.units[project.entryIndex].ast->name, units);
                 } else {
@@ -416,10 +423,23 @@ int main(int argc, char** argv) {
                     const claw::frontend::OirProgram program{entryRealm, entryRealm + "::main", {oir.lowerRealm(project.units[project.entryIndex].ast.get())}};
                     std::cout << claw::frontend::emitLlvmIr(claw::frontend::buildLirProgram(program));
                 }
+            } else {
+                std::filesystem::path outputPath = outputArg.empty()
+                    ? claw::driver::defaultNativeOutputPath(project)
+                    : resolveOutputPath(outputArg);
+                if (!outputPath.has_extension()) {
+                    outputPath += ".exe";
+                }
+                const auto builtPath = claw::driver::buildNativeExecutable(
+                    project,
+                    project.units[project.entryIndex].ast->name,
+                    units,
+                    std::filesystem::path(argv[0]),
+                    outputPath);
+                std::cout << "Built native executable: " << builtPath.string() << "\n";
             }
             return 0;
         }
-
         if (command == "build") {
             std::cout << "Build graph validated";
             if (project.config.has_value()) {
@@ -443,3 +463,8 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
+
+
+
+

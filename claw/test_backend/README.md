@@ -11,6 +11,9 @@ Current scope:
 - explicit LLVM lowering of the current `bounds_check` path into branch-to-defect flow
 - concrete choice `pick` lowering with tag-based `switch`, payload extraction, and defect blocks
 - initial `lift` lowering for concrete `Outcome of T, E` values
+- first indirect aggregate ABI lowering for direct Claw calls, including hidden return slots, pointer-based aggregate parameters, and concrete shape field load/store lowering
+- iterator lowering for the current slice-like iterable subset plus direct LLVM lowering for `break` / `continue` loop control
+- explicit negative coverage for raw-only external calls that still have no supported LLVM contract
 
 Primary runner:
 - `bash test_backend/run_backend_tests.sh`

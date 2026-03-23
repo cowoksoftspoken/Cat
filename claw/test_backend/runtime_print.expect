@@ -1,19 +1,22 @@
 ; ModuleID = 'claw'
-target triple = "x86_64-pc-windows-gnu"
+target triple = "x86_64-w64-windows-gnu"
 
 %claw.slice = type { ptr, i64 }
 %claw.buffer = type { ptr, i64, i64 }
 @.str.0 = private unnamed_addr constant [6 x i8] c"hello\00"
 
-declare void @"claw.runtime.println.slice"(%claw.slice)
+declare void @"claw.runtime.println.slice"(ptr)
 declare void @"claw.runtime.print.i32"(i32)
 
 define internal void @"test_backend.runtime_print::main"() {
 entry:
-  %str.ptr.0 = getelementptr inbounds [6 x i8], ptr @.str.0, i64 0, i64 0
-  %str.slice.1 = insertvalue %claw.slice poison, ptr %str.ptr.0, 0
-  %str.slice.2 = insertvalue %claw.slice %str.slice.1, i64 5, 1
-  call void @"claw.runtime.println.slice"(%claw.slice %str.slice.2)
+  %addr.0 = alloca %claw.slice, align 8
+  %str.ptr.1 = getelementptr inbounds [6 x i8], ptr @.str.0, i64 0, i64 0
+  %str.slice.2 = insertvalue %claw.slice poison, ptr %str.ptr.1, 0
+  %str.slice.3 = insertvalue %claw.slice %str.slice.2, i64 5, 1
+  store %claw.slice %str.slice.3, ptr %addr.0, align 8
+  call void @"claw.runtime.println.slice"(ptr %addr.0)
   call void @"claw.runtime.print.i32"(i32 7)
   ret void
 }
+

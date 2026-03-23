@@ -10,5 +10,7 @@ namespace claw::frontend {
 
 std::string emitLlvmIr(const LirProgram& program);
 std::string emitLlvmIr(std::string_view entryRealm, const std::vector<OirUnitView>& units);
+std::string emitNativeLlvmIr(const LirProgram& program);
+std::string emitNativeLlvmIr(std::string_view entryRealm, const std::vector<OirUnitView>& units);
 
 } // namespace claw::frontend

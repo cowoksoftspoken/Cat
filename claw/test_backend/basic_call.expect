@@ -1,5 +1,5 @@
 ; ModuleID = 'claw'
-target triple = "x86_64-pc-windows-gnu"
+target triple = "x86_64-w64-windows-gnu"
 
 %claw.slice = type { ptr, i64 }
 %claw.buffer = type { ptr, i64, i64 }
@@ -14,3 +14,4 @@ entry:
   %t0 = call i32 @"test_backend.basic_call::add"(i32 20, i32 22)
   ret i32 %t0
 }
+

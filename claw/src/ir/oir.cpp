@@ -506,10 +506,15 @@ std::optional<size_t> lowerStmt(
         const std::string itemType = itemTypeIt != sema.result().scanItemTypes.end()
             ? itemTypeIt->second.describe()
             : std::string("<unknown>");
+        const std::string headerLabel = context.blockName("scan_header");
         const std::string bodyLabel = context.blockName("scan_body");
         const std::string exitLabel = context.blockName("scan_exit");
-        appendInst(context, currentBlockIndex, OirScanInst{scan->itemName, itemType, iterable, bodyLabel, exitLabel});
-        lowerBlock(sema, ownership, scan->body.get(), bodyLabel, context, exitLabel, emitter);
+        appendInst(context, currentBlockIndex, OirGotoInst{headerLabel});
+        const size_t headerIndex = context.addBlock(headerLabel);
+        appendInst(context, headerIndex, OirScanInst{scan->itemName, itemType, iterable, bodyLabel, exitLabel});
+        context.loopStack.push_back(LoopTargets{headerLabel, exitLabel});
+        lowerBlock(sema, ownership, scan->body.get(), bodyLabel, context, headerLabel, emitter);
+        context.loopStack.pop_back();
         return context.addBlock(exitLabel);
     }
 

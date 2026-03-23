@@ -12,6 +12,10 @@ add_library(claw_frontend
     src/ir/oir.cpp
     src/ir/lir.cpp
     src/backend/llvm_ir.cpp
+    src/backend/llvm_types.cpp
+    src/backend/llvm_values.cpp
+    src/backend/llvm_control.cpp
+    src/backend/llvm_emit.cpp
     src/analysis/types.cpp
     src/analysis/scope.cpp
     src/analysis/sema.cpp
@@ -21,6 +25,11 @@ add_library(claw_frontend
 )
 target_include_directories(claw_frontend PUBLIC src)
 
-add_executable(claw src/driver/main.cpp)
+add_executable(claw
+    src/driver/main.cpp
+    src/driver/native_build.cpp
+)
 target_link_libraries(claw PRIVATE claw_frontend)
+
+
 
