@@ -16,6 +16,7 @@ struct Symbol {
     bool isMutable = false;
     bool isExternal = false;
     ResolvedType type;
+    const BindingStmt* bindingDecl = nullptr;
     std::optional<size_t> viewSourceParamIndex;
     std::shared_ptr<ModuleInfo> moduleInfo;
 };

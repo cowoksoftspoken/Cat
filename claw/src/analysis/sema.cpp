@@ -1032,7 +1032,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         const bool opaqueInitializer = bind->value && valueType.isOpaqueExternal();
         ResolvedType finalType = bind->type ? declaredType : normalizeInferredLiteralType(valueType);
 
-        if (!bind->type && !bind->value) {
+        if (!bind->type && !bind->value && !bind->isMutable) {
             reportError(bind, "Binding requires a type or an initializer: " + bind->name);
             finalType = makeUnknownType();
         }
@@ -1079,7 +1079,8 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             bind->isMutable,
             "Duplicate variable declaration: " + bind->name,
             bind->span,
-            viewSourceParamIndex);
+            viewSourceParamIndex,
+            bind);
         return;
     }
 
@@ -1109,6 +1110,24 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                         assign->value.get(),
                         opaqueExternalValueUseMessage(valueType, "assignment to '" + ident->name + "'"));
                 } else {
+                    if (sym->type.isUnknown()) {
+                        const ResolvedType inferredType = normalizeInferredLiteralType(valueType);
+                        if (!inferredType.isUnknown()) {
+                            sym->type = inferredType;
+                            if (sym->bindingDecl) {
+                                analysisResult.bindingTypes[sym->bindingDecl] = inferredType;
+                            }
+                            if (isNumericLiteralType(valueType)) {
+                                analysisResult.exprTypes[assign->value.get()] = inferredType;
+                            }
+                            if (inferredType.isView()) {
+                                sym->viewSourceParamIndex = resolveViewSourceParam(assign->value.get());
+                            } else {
+                                sym->viewSourceParamIndex.reset();
+                            }
+                        }
+                    }
+
                     const bool assignmentTypeMatches = sym->type.isView()
                         ? canPassArgumentType(assign->value.get(), valueType, sym->type)
                         : canAssignType(valueType, sym->type);
@@ -1245,7 +1264,12 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         if (iterableType.isOpaqueExternal()) {
             reportError(scan->iterable.get(), opaqueExternalValueUseMessage(iterableType, "scan iterable"));
         }
-        const ResolvedType itemType = !iterableType.params.empty() ? iterableType.params.front() : makeUnknownType();
+        ResolvedType itemType = makeUnknownType();
+        if (iterableType.name == "Text" || iterableType.name == "Bytes") {
+            itemType = makePlainType("Byte");
+        } else if (!iterableType.params.empty()) {
+            itemType = iterableType.params.front();
+        }
         analysisResult.scanItemTypes[scan] = itemType;
 
         scopes.enterScope();
@@ -1856,12 +1880,14 @@ void SemanticAnalyzer::defineVariable(
     bool isMutable,
     const std::string& duplicateMessage,
     const SourceSpan& duplicateSpan,
-    std::optional<size_t> viewSourceParamIndex) {
+    std::optional<size_t> viewSourceParamIndex,
+    const BindingStmt* bindingDecl) {
     auto sym = std::make_shared<Symbol>();
     sym->name = name;
     sym->kind = SymbolKind::Variable;
     sym->isMutable = isMutable;
     sym->type = type;
+    sym->bindingDecl = bindingDecl;
     sym->viewSourceParamIndex = viewSourceParamIndex;
 
     if (!scopes.define(name, sym)) {

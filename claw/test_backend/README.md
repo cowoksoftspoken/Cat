@@ -19,7 +19,7 @@ Primary runner:
 - `bash test_backend/run_backend_tests.sh`
 
 Current validation strategy:
-- emit LLVM IR with `claw emit-llvm ...`
+- emit LLVM IR with `claw llvm ...`
 - assemble it with `llvm-as`
 - lower it to an object with `llc`
 - compare stable textual snapshots for the current subset

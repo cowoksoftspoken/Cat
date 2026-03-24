@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 CLAW_EXE="${CLAW_EXE:-$ROOT_DIR/build-ucrt64/claw.exe}"
-WORK_DIR="$ROOT_DIR/build-native-tests"
+WORK_DIR="$ROOT_DIR/build-tests"
 
 if [[ ! -x "$CLAW_EXE" ]]; then
   echo "missing compiler executable: $CLAW_EXE" >&2
@@ -26,8 +26,8 @@ run_case() {
   local exe_path="$WORK_DIR/$label.exe"
   local out_path="$WORK_DIR/$label.out"
 
-  echo "[build-native] $label"
-  "$CLAW_EXE" build-native "$ROOT_DIR/$input_path" "$exe_path" > "$WORK_DIR/$label.build.log"
+  echo "[build] $label"
+  "$CLAW_EXE" build "$ROOT_DIR/$input_path" "$exe_path" > "$WORK_DIR/$label.build.log"
 
   if [[ ! -f "$exe_path" ]]; then
     echo "$label did not produce an executable" >&2
@@ -61,5 +61,7 @@ run_case() {
 run_case "test_native/hello_runtime" "hello_runtime" 0 $'hello\n7'
 run_case "test_native/unit_main" "unit_main" 0 $'unit'
 run_case "test_native/import_program" "import_program" 0 $'7'
+run_case "test_native/loop_control" "loop_control" 0 $'8'
+run_case "test_native/text_scan" "text_scan" 0 $'2'
 
 echo "all native integration tests passed"

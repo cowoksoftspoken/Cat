@@ -307,12 +307,39 @@ void printUsage() {
     std::cout << "Usage: claw <command> <file.cat|workspace|config> [output.exe]\n"
               << "Commands:\n"
               << "  check         Parse and validate semantics + ownership\n"
-              << "  emit-air      Emit analyzed IR view after semantic analysis\n"
-              << "  emit-oir      Emit lowered OIR view closer to backend\n"
-              << "  emit-lir      Emit backend-facing lowering IR derived from OIR\n"
-              << "  emit-llvm     Emit initial LLVM IR lowered from LIR\n"
-              << "  build         Validate a workspace entry graph rooted at main.cat\n"
-              << "  build-native  Compile a validated entry graph into a native executable\n";
+              << "  validate      Validate a workspace entry graph rooted at main.cat\n"
+              << "  air           Emit analyzed AIR after semantic analysis\n"
+              << "  oir           Emit lowered OIR closer to backend\n"
+              << "  lir           Emit backend-facing lowering IR derived from OIR\n"
+              << "  llvm          Emit LLVM IR lowered from LIR\n"
+              << "  build         Compile a validated entry graph into a native executable\n"
+              << "Aliases:\n"
+              << "  emit-air, emit-oir, emit-lir, emit-llvm, build-native\n";
+}
+
+std::string canonicalizeCommand(std::string_view rawCommand) {
+    if (rawCommand == "check") {
+        return "check";
+    }
+    if (rawCommand == "validate") {
+        return "validate";
+    }
+    if (rawCommand == "air" || rawCommand == "emit-air") {
+        return "air";
+    }
+    if (rawCommand == "oir" || rawCommand == "emit-oir") {
+        return "oir";
+    }
+    if (rawCommand == "lir" || rawCommand == "emit-lir") {
+        return "lir";
+    }
+    if (rawCommand == "llvm" || rawCommand == "emit-llvm") {
+        return "llvm";
+    }
+    if (rawCommand == "build" || rawCommand == "build-native") {
+        return "build";
+    }
+    return {};
 }
 } // namespace
 
@@ -322,12 +349,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const std::string command = argv[1];
+    const std::string rawCommand = argv[1];
+    const std::string command = canonicalizeCommand(rawCommand);
     const std::string filepath = argv[2];
     const std::string outputArg = argc >= 4 ? argv[3] : std::string{};
 
-    if (command != "check" && command != "build" && command != "build-native" && command != "emit-air" && command != "emit-oir" && command != "emit-lir" && command != "emit-llvm") {
-        std::cerr << "Unknown command: " << command << "\n";
+    if (command.empty()) {
+        std::cerr << "Unknown command: " << rawCommand << "\n";
         printUsage();
         return 1;
     }
@@ -367,9 +395,9 @@ int main(int argc, char** argv) {
             analyzers.push_back(std::move(sema));
         }
 
-        validateEntryPoint(project, *analyzers[project.entryIndex], command == "build" || command == "build-native");
+        validateEntryPoint(project, *analyzers[project.entryIndex], command == "validate" || command == "build");
 
-        if (command == "emit-air") {
+        if (command == "air") {
             claw::frontend::AirEmitter air(*analyzers[project.entryIndex]);
             std::cout << air.emit(project.units[project.entryIndex].ast.get());
             return 0;
@@ -387,7 +415,7 @@ int main(int argc, char** argv) {
             ownershipCheckers.push_back(std::move(ownership));
         }
 
-        if (command == "emit-oir" || command == "emit-lir" || command == "emit-llvm" || command == "build-native") {
+        if (command == "oir" || command == "lir" || command == "llvm" || command == "build") {
             std::vector<claw::frontend::OirUnitView> units;
             units.reserve(project.units.size());
             for (size_t i = 0; i < project.units.size(); ++i) {
@@ -398,14 +426,14 @@ int main(int argc, char** argv) {
                 project.units[project.entryIndex].path.filename() == "main.cat" &&
                 project.units[project.entryIndex].path.parent_path().lexically_normal() == project.packageRoot.lexically_normal();
 
-            if (command == "emit-oir") {
+            if (command == "oir") {
                 if (emitWholeProject) {
                     std::cout << claw::frontend::emitOirProgram(project.units[project.entryIndex].ast->name, units);
                 } else {
                     claw::frontend::OirEmitter oir(*analyzers[project.entryIndex], &ownershipCheckers[project.entryIndex]->result());
                     std::cout << oir.emit(project.units[project.entryIndex].ast.get());
                 }
-            } else if (command == "emit-lir") {
+            } else if (command == "lir") {
                 if (emitWholeProject) {
                     std::cout << claw::frontend::emitLirProgram(project.units[project.entryIndex].ast->name, units);
                 } else {
@@ -414,7 +442,7 @@ int main(int argc, char** argv) {
                     const claw::frontend::OirProgram program{entryRealm, entryRealm + "::main", {oir.lowerRealm(project.units[project.entryIndex].ast.get())}};
                     std::cout << claw::frontend::emitLirProgram(program);
                 }
-            } else if (command == "emit-llvm") {
+            } else if (command == "llvm") {
                 if (emitWholeProject) {
                     std::cout << claw::frontend::emitLlvmIr(project.units[project.entryIndex].ast->name, units);
                 } else {
@@ -440,8 +468,8 @@ int main(int argc, char** argv) {
             }
             return 0;
         }
-        if (command == "build") {
-            std::cout << "Build graph validated";
+        if (command == "validate") {
+            std::cout << "Workspace graph validated";
             if (project.config.has_value()) {
                 std::cout << " for project " << project.config->name
                           << " (edition " << project.config->edition << ")";

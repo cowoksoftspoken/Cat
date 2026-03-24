@@ -28,8 +28,8 @@ check_emit_case() {
   tmp_obj="$(mktemp)"
   trap 'rm -f "$tmp_ll" "$tmp_bc" "$tmp_obj"' RETURN
 
-  echo "[emit-llvm] $label"
-  "$CLAW_EXE" emit-llvm "$ROOT_DIR/$input_path" > "$tmp_ll"
+  echo "[llvm] $label"
+  "$CLAW_EXE" llvm "$ROOT_DIR/$input_path" > "$tmp_ll"
 
   local actual_output
   local expected_output
@@ -57,8 +57,8 @@ check_emit_failure() {
   tmp_out="$(mktemp)"
   trap 'rm -f "$tmp_out"' RETURN
 
-  echo "[emit-llvm/fail] $label"
-  if "$CLAW_EXE" emit-llvm "$ROOT_DIR/$input_path" > "$tmp_out" 2>&1; then
+  echo "[llvm/fail] $label"
+  if "$CLAW_EXE" llvm "$ROOT_DIR/$input_path" > "$tmp_out" 2>&1; then
     echo "$label unexpectedly succeeded" >&2
     cat "$tmp_out" >&2
     exit 1

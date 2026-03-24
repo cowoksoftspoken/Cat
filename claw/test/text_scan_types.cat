@@ -1,0 +1,12 @@
+realm test.text_scan_types
+
+fn count_letter_l(text: look Text) -> Byte {
+    slot count: Byte = 0
+    scan item over text {
+        print(item)
+        when item == 108 {
+            count = count + 1
+        }
+    }
+    give count
+}

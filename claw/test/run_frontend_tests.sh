@@ -32,6 +32,8 @@ pass_cases=(
   "test/float_literals.cat"
   "test/target_size_types.cat"
   "test/method_dispatch.cat"
+  "test/type_infer_slot.cat"
+  "test/text_scan_types.cat"
   "test/lir_edges.cat"
   "test/raw_regions.cat"
   "test/layout_ir.cat"
@@ -46,29 +48,29 @@ for case_file in "${pass_cases[@]}"; do
   "$CLAW_EXE" check "$ROOT_DIR/$case_file"
 done
 
-echo "[build/pass] test/pkg_demo"
-"$CLAW_EXE" build "$ROOT_DIR/test/pkg_demo"
+echo "[validate/pass] test/pkg_demo"
+"$CLAW_EXE" validate "$ROOT_DIR/test/pkg_demo"
 
-echo "[build/pass] test/pkg_demo/claw.toml"
-"$CLAW_EXE" build "$ROOT_DIR/test/pkg_demo/claw.toml"
+echo "[validate/pass] test/pkg_demo/claw.toml"
+"$CLAW_EXE" validate "$ROOT_DIR/test/pkg_demo/claw.toml"
 
-echo "[build/pass] test/pkg_rootless_demo"
-"$CLAW_EXE" build "$ROOT_DIR/test/pkg_rootless_demo"
+echo "[validate/pass] test/pkg_rootless_demo"
+"$CLAW_EXE" validate "$ROOT_DIR/test/pkg_rootless_demo"
 
-echo "[build/pass] test/pkg_rootless_demo/claw.toml"
-"$CLAW_EXE" build "$ROOT_DIR/test/pkg_rootless_demo/claw.toml"
+echo "[validate/pass] test/pkg_rootless_demo/claw.toml"
+"$CLAW_EXE" validate "$ROOT_DIR/test/pkg_rootless_demo/claw.toml"
 
-echo "[build/pass] test/pkg_typed_external_safe"
-"$CLAW_EXE" build "$ROOT_DIR/test/pkg_typed_external_safe"
+echo "[validate/pass] test/pkg_typed_external_safe"
+"$CLAW_EXE" validate "$ROOT_DIR/test/pkg_typed_external_safe"
 
-echo "[build/pass] test/pkg_typed_external_safe/claw.toml"
-"$CLAW_EXE" build "$ROOT_DIR/test/pkg_typed_external_safe/claw.toml"
+echo "[validate/pass] test/pkg_typed_external_safe/claw.toml"
+"$CLAW_EXE" validate "$ROOT_DIR/test/pkg_typed_external_safe/claw.toml"
 
-echo "[build/pass] test/pkg_foreign_safe_scalar"
-"$CLAW_EXE" build "$ROOT_DIR/test/pkg_foreign_safe_scalar"
+echo "[validate/pass] test/pkg_foreign_safe_scalar"
+"$CLAW_EXE" validate "$ROOT_DIR/test/pkg_foreign_safe_scalar"
 
-echo "[build/pass] test/pkg_foreign_safe_scalar/claw.toml"
-"$CLAW_EXE" build "$ROOT_DIR/test/pkg_foreign_safe_scalar/claw.toml"
+echo "[validate/pass] test/pkg_foreign_safe_scalar/claw.toml"
+"$CLAW_EXE" validate "$ROOT_DIR/test/pkg_foreign_safe_scalar/claw.toml"
 
 echo "[check/warn] test/pkg_main_share_warning"
 main_share_warning_output=""
@@ -87,8 +89,8 @@ if [[ "$main_share_warning_output" != *"warning[module]: Shared function 'boot_b
   exit 1
 fi
 
-echo "[emit-oir] test/pkg_main_share_warning"
-main_share_oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/pkg_main_share_warning" | normalize_text)"
+echo "[oir] test/pkg_main_share_warning"
+main_share_oir_output="$($CLAW_EXE oir "$ROOT_DIR/test/pkg_main_share_warning" | normalize_text)"
 if [[ "$main_share_oir_output" != *"link=internal symbol=main::boot_banner"* ]] ||
    [[ "$main_share_oir_output" == *"link=shared symbol=main::boot_banner"* ]]; then
   echo "pkg_main_share_warning emit_oir did not neutralize entry share linkage" >&2
@@ -97,13 +99,46 @@ if [[ "$main_share_oir_output" != *"link=internal symbol=main::boot_banner"* ]] 
   exit 1
 fi
 
-echo "[emit-lir] test/pkg_main_share_warning"
-main_share_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/pkg_main_share_warning" | normalize_text)"
+echo "[lir] test/pkg_main_share_warning"
+main_share_lir_output="$($CLAW_EXE lir "$ROOT_DIR/test/pkg_main_share_warning" | normalize_text)"
 if [[ "$main_share_lir_output" != *"link=internal symbol=main::boot_banner"* ]] ||
    [[ "$main_share_lir_output" == *"link=shared symbol=main::boot_banner"* ]]; then
   echo "pkg_main_share_warning emit_lir did not neutralize entry share linkage" >&2
   printf '%s
 ' "$main_share_lir_output" >&2
+  exit 1
+fi
+
+echo "[air] test/text_scan_types.cat"
+text_scan_air_output="$($CLAW_EXE air "$ROOT_DIR/test/text_scan_types.cat" | normalize_text)"
+if [[ "$text_scan_air_output" != *"print(item : Byte)"* ]]; then
+  echo "text_scan_types.cat did not infer Byte items for Text scan" >&2
+  printf '%s
+' "$text_scan_air_output" >&2
+  exit 1
+fi
+
+echo "[air] test/type_infer_slot.cat"
+type_infer_air_output="$($CLAW_EXE air "$ROOT_DIR/test/type_infer_slot.cat" | normalize_text)"
+if [[ "$type_infer_air_output" != *"slot count: Int32"* ]] ||
+   [[ "$type_infer_air_output" != *"slot prefix: look Text"* ]]; then
+  echo "type_infer_slot.cat did not preserve deferred inferred types in AIR" >&2
+  printf '%s
+' "$type_infer_air_output" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/type_infer_slot_diagnostics.cat"
+type_infer_diag_output=""
+if type_infer_diag_output="$($CLAW_EXE check "$ROOT_DIR/test/type_infer_slot_diagnostics.cat" 2>&1)"; then
+  echo "expected type_infer_slot_diagnostics.cat to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$type_infer_diag_output" != *"Assigned value type mismatch for 'value': expected Int32, got Text"* ]] ||
+   [[ "$type_infer_diag_output" != *"Assigned value type mismatch for 'prefix': expected look Text, got integer literal"* ]]; then
+  echo "type_infer_slot_diagnostics.cat did not contain the expected deferred inference diagnostics" >&2
+  printf '%s
+' "$type_infer_diag_output" >&2
   exit 1
 fi
 
@@ -463,8 +498,8 @@ if [[ "$missing_output" != *"Failed to resolve input path."* ]] ||
   exit 1
 fi
 
-echo "[emit-air] test/emit_air.cat"
-air_output="$($CLAW_EXE emit-air "$ROOT_DIR/test/emit_air.cat" | normalize_text)"
+echo "[air] test/emit_air.cat"
+air_output="$($CLAW_EXE air "$ROOT_DIR/test/emit_air.cat" | normalize_text)"
 expected_air_output="$(cat "$ROOT_DIR/test/emit_air.expect" | normalize_text)"
 if [[ "$air_output" != "$expected_air_output" ]]; then
   echo "emit_air snapshot mismatch" >&2
@@ -475,8 +510,8 @@ if [[ "$air_output" != "$expected_air_output" ]]; then
   exit 1
 fi
 
-echo "[emit-air] test/method_dispatch_air.cat"
-method_air_output="$($CLAW_EXE emit-air "$ROOT_DIR/test/method_dispatch_air.cat" | normalize_text)"
+echo "[air] test/method_dispatch_air.cat"
+method_air_output="$($CLAW_EXE air "$ROOT_DIR/test/method_dispatch_air.cat" | normalize_text)"
 expected_method_air_output="$(cat "$ROOT_DIR/test/method_dispatch_air.expect" | normalize_text)"
 if [[ "$method_air_output" != "$expected_method_air_output" ]]; then
   echo "method dispatch emit_air snapshot mismatch" >&2
@@ -489,8 +524,8 @@ if [[ "$method_air_output" != "$expected_method_air_output" ]]; then
   exit 1
 fi
 
-echo "[emit-air] test/float_emit_air.cat"
-float_air_output="$($CLAW_EXE emit-air "$ROOT_DIR/test/float_emit_air.cat" | normalize_text)"
+echo "[air] test/float_emit_air.cat"
+float_air_output="$($CLAW_EXE air "$ROOT_DIR/test/float_emit_air.cat" | normalize_text)"
 expected_float_air_output="$(cat "$ROOT_DIR/test/float_emit_air.expect" | normalize_text)"
 if [[ "$float_air_output" != "$expected_float_air_output" ]]; then
   echo "float emit_air snapshot mismatch" >&2
@@ -503,8 +538,8 @@ if [[ "$float_air_output" != "$expected_float_air_output" ]]; then
   exit 1
 fi
 
-echo "[emit-air] test/scalar_emit_air.cat"
-scalar_air_output="$($CLAW_EXE emit-air "$ROOT_DIR/test/scalar_emit_air.cat" | normalize_text)"
+echo "[air] test/scalar_emit_air.cat"
+scalar_air_output="$($CLAW_EXE air "$ROOT_DIR/test/scalar_emit_air.cat" | normalize_text)"
 expected_scalar_air_output="$(cat "$ROOT_DIR/test/scalar_emit_air.expect" | normalize_text)"
 if [[ "$scalar_air_output" != "$expected_scalar_air_output" ]]; then
   echo "scalar emit_air snapshot mismatch" >&2
@@ -515,8 +550,8 @@ if [[ "$scalar_air_output" != "$expected_scalar_air_output" ]]; then
   exit 1
 fi
 
-echo "[emit-oir] test/emit_air.cat"
-oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/emit_air.cat" | normalize_text)"
+echo "[oir] test/emit_air.cat"
+oir_output="$($CLAW_EXE oir "$ROOT_DIR/test/emit_air.cat" | normalize_text)"
 expected_oir_output="$(cat "$ROOT_DIR/test/emit_oir.expect" | normalize_text)"
 if [[ "$oir_output" != "$expected_oir_output" ]]; then
   echo "emit_oir snapshot mismatch" >&2
@@ -527,8 +562,8 @@ if [[ "$oir_output" != "$expected_oir_output" ]]; then
   exit 1
 fi
 
-echo "[emit-oir] test/raw_regions.cat"
-raw_oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/raw_regions.cat" | normalize_text)"
+echo "[oir] test/raw_regions.cat"
+raw_oir_output="$($CLAW_EXE oir "$ROOT_DIR/test/raw_regions.cat" | normalize_text)"
 expected_raw_oir_output="$(cat "$ROOT_DIR/test/raw_regions_oir.expect" | normalize_text)"
 if [[ "$raw_oir_output" != "$expected_raw_oir_output" ]]; then
   echo "raw_regions emit_oir snapshot mismatch" >&2
@@ -541,8 +576,8 @@ if [[ "$raw_oir_output" != "$expected_raw_oir_output" ]]; then
   exit 1
 fi
 
-echo "[emit-oir] test/drop_schedule.cat"
-drop_schedule_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/drop_schedule.cat" | normalize_text)"
+echo "[oir] test/drop_schedule.cat"
+drop_schedule_output="$($CLAW_EXE oir "$ROOT_DIR/test/drop_schedule.cat" | normalize_text)"
 expected_drop_schedule_output="$(cat "$ROOT_DIR/test/drop_schedule_oir.expect" | normalize_text)"
 if [[ "$drop_schedule_output" != "$expected_drop_schedule_output" ]]; then
   echo "drop_schedule emit_oir snapshot mismatch" >&2
@@ -553,8 +588,8 @@ if [[ "$drop_schedule_output" != "$expected_drop_schedule_output" ]]; then
   exit 1
 fi
 
-echo "[emit-oir] test/layout_ir.cat"
-layout_oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/layout_ir.cat" | normalize_text)"
+echo "[oir] test/layout_ir.cat"
+layout_oir_output="$($CLAW_EXE oir "$ROOT_DIR/test/layout_ir.cat" | normalize_text)"
 expected_layout_oir_output="$(cat "$ROOT_DIR/test/layout_oir.expect" | normalize_text)"
 if [[ "$layout_oir_output" != "$expected_layout_oir_output" ]]; then
   echo "layout_ir emit_oir snapshot mismatch" >&2
@@ -567,8 +602,8 @@ if [[ "$layout_oir_output" != "$expected_layout_oir_output" ]]; then
   exit 1
 fi
 
-echo "[emit-oir] test/pkg_demo"
-package_oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/pkg_demo" | normalize_text)"
+echo "[oir] test/pkg_demo"
+package_oir_output="$($CLAW_EXE oir "$ROOT_DIR/test/pkg_demo" | normalize_text)"
 expected_package_oir_output="$(cat "$ROOT_DIR/test/pkg_demo/emit_oir.expect" | normalize_text)"
 if [[ "$package_oir_output" != "$expected_package_oir_output" ]]; then
   echo "pkg_demo emit_oir snapshot mismatch" >&2
@@ -579,8 +614,8 @@ if [[ "$package_oir_output" != "$expected_package_oir_output" ]]; then
   exit 1
 fi
 
-echo "[emit-oir] test/pkg_typed_external_safe"
-typed_safe_oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/pkg_typed_external_safe" | normalize_text)"
+echo "[oir] test/pkg_typed_external_safe"
+typed_safe_oir_output="$($CLAW_EXE oir "$ROOT_DIR/test/pkg_typed_external_safe" | normalize_text)"
 expected_typed_safe_oir_output="$(cat "$ROOT_DIR/test/pkg_typed_external_safe/emit_oir.expect" | normalize_text)"
 if [[ "$typed_safe_oir_output" != "$expected_typed_safe_oir_output" ]]; then
   echo "pkg_typed_external_safe emit_oir snapshot mismatch" >&2
@@ -593,8 +628,8 @@ if [[ "$typed_safe_oir_output" != "$expected_typed_safe_oir_output" ]]; then
   exit 1
 fi
 
-echo "[emit-oir] test/pkg_foreign_safe_scalar"
-foreign_safe_scalar_oir_output="$($CLAW_EXE emit-oir "$ROOT_DIR/test/pkg_foreign_safe_scalar" | normalize_text)"
+echo "[oir] test/pkg_foreign_safe_scalar"
+foreign_safe_scalar_oir_output="$($CLAW_EXE oir "$ROOT_DIR/test/pkg_foreign_safe_scalar" | normalize_text)"
 expected_foreign_safe_scalar_oir_output="$(cat "$ROOT_DIR/test/pkg_foreign_safe_scalar/emit_oir.expect" | normalize_text)"
 if [[ "$foreign_safe_scalar_oir_output" != "$expected_foreign_safe_scalar_oir_output" ]]; then
   echo "pkg_foreign_safe_scalar emit_oir snapshot mismatch" >&2
@@ -607,8 +642,8 @@ if [[ "$foreign_safe_scalar_oir_output" != "$expected_foreign_safe_scalar_oir_ou
   exit 1
 fi
 
-echo "[emit-lir] test/emit_air.cat"
-lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/emit_air.cat" | normalize_text)"
+echo "[lir] test/emit_air.cat"
+lir_output="$($CLAW_EXE lir "$ROOT_DIR/test/emit_air.cat" | normalize_text)"
 expected_lir_output="$(cat "$ROOT_DIR/test/emit_lir.expect" | normalize_text)"
 if [[ "$lir_output" != "$expected_lir_output" ]]; then
   echo "emit_lir snapshot mismatch" >&2
@@ -621,8 +656,8 @@ if [[ "$lir_output" != "$expected_lir_output" ]]; then
   exit 1
 fi
 
-echo "[emit-lir] test/raw_regions.cat"
-raw_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/raw_regions.cat" | normalize_text)"
+echo "[lir] test/raw_regions.cat"
+raw_lir_output="$($CLAW_EXE lir "$ROOT_DIR/test/raw_regions.cat" | normalize_text)"
 expected_raw_lir_output="$(cat "$ROOT_DIR/test/raw_regions_lir.expect" | normalize_text)"
 if [[ "$raw_lir_output" != "$expected_raw_lir_output" ]]; then
   echo "raw_regions emit_lir snapshot mismatch" >&2
@@ -635,8 +670,8 @@ if [[ "$raw_lir_output" != "$expected_raw_lir_output" ]]; then
   exit 1
 fi
 
-echo "[emit-lir] test/layout_ir.cat"
-layout_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/layout_ir.cat" | normalize_text)"
+echo "[lir] test/layout_ir.cat"
+layout_lir_output="$($CLAW_EXE lir "$ROOT_DIR/test/layout_ir.cat" | normalize_text)"
 expected_layout_lir_output="$(cat "$ROOT_DIR/test/layout_lir.expect" | normalize_text)"
 if [[ "$layout_lir_output" != "$expected_layout_lir_output" ]]; then
   echo "layout_ir emit_lir snapshot mismatch" >&2
@@ -649,8 +684,8 @@ if [[ "$layout_lir_output" != "$expected_layout_lir_output" ]]; then
   exit 1
 fi
 
-echo "[emit-lir] test/drop_schedule.cat"
-drop_schedule_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/drop_schedule.cat" | normalize_text)"
+echo "[lir] test/drop_schedule.cat"
+drop_schedule_lir_output="$($CLAW_EXE lir "$ROOT_DIR/test/drop_schedule.cat" | normalize_text)"
 expected_drop_schedule_lir_output="$(cat "$ROOT_DIR/test/drop_schedule_lir.expect" | normalize_text)"
 if [[ "$drop_schedule_lir_output" != "$expected_drop_schedule_lir_output" ]]; then
   echo "drop_schedule emit_lir snapshot mismatch" >&2
@@ -663,8 +698,8 @@ if [[ "$drop_schedule_lir_output" != "$expected_drop_schedule_lir_output" ]]; th
   exit 1
 fi
 
-echo "[emit-lir] test/lir_edges.cat"
-lir_edges_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/lir_edges.cat" | normalize_text)"
+echo "[lir] test/lir_edges.cat"
+lir_edges_output="$($CLAW_EXE lir "$ROOT_DIR/test/lir_edges.cat" | normalize_text)"
 expected_lir_edges_output="$(cat "$ROOT_DIR/test/lir_edges.expect" | normalize_text)"
 if [[ "$lir_edges_output" != "$expected_lir_edges_output" ]]; then
   echo "lir_edges emit_lir snapshot mismatch" >&2
@@ -677,8 +712,8 @@ if [[ "$lir_edges_output" != "$expected_lir_edges_output" ]]; then
   exit 1
 fi
 
-echo "[emit-lir] test/pkg_typed_external_safe"
-typed_safe_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/pkg_typed_external_safe" | normalize_text)"
+echo "[lir] test/pkg_typed_external_safe"
+typed_safe_lir_output="$($CLAW_EXE lir "$ROOT_DIR/test/pkg_typed_external_safe" | normalize_text)"
 expected_typed_safe_lir_output="$(cat "$ROOT_DIR/test/pkg_typed_external_safe/emit_lir.expect" | normalize_text)"
 if [[ "$typed_safe_lir_output" != "$expected_typed_safe_lir_output" ]]; then
   echo "pkg_typed_external_safe emit_lir snapshot mismatch" >&2
@@ -691,8 +726,8 @@ if [[ "$typed_safe_lir_output" != "$expected_typed_safe_lir_output" ]]; then
   exit 1
 fi
 
-echo "[emit-lir] test/pkg_foreign_safe_scalar"
-foreign_safe_scalar_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/pkg_foreign_safe_scalar" | normalize_text)"
+echo "[lir] test/pkg_foreign_safe_scalar"
+foreign_safe_scalar_lir_output="$($CLAW_EXE lir "$ROOT_DIR/test/pkg_foreign_safe_scalar" | normalize_text)"
 expected_foreign_safe_scalar_lir_output="$(cat "$ROOT_DIR/test/pkg_foreign_safe_scalar/emit_lir.expect" | normalize_text)"
 if [[ "$foreign_safe_scalar_lir_output" != "$expected_foreign_safe_scalar_lir_output" ]]; then
   echo "pkg_foreign_safe_scalar emit_lir snapshot mismatch" >&2
@@ -705,8 +740,8 @@ if [[ "$foreign_safe_scalar_lir_output" != "$expected_foreign_safe_scalar_lir_ou
   exit 1
 fi
 
-echo "[emit-lir] test/pkg_demo"
-package_lir_output="$($CLAW_EXE emit-lir "$ROOT_DIR/test/pkg_demo" | normalize_text)"
+echo "[lir] test/pkg_demo"
+package_lir_output="$($CLAW_EXE lir "$ROOT_DIR/test/pkg_demo" | normalize_text)"
 expected_package_lir_output="$(cat "$ROOT_DIR/test/pkg_demo/emit_lir.expect" | normalize_text)"
 if [[ "$package_lir_output" != "$expected_package_lir_output" ]]; then
   echo "pkg_demo emit_lir snapshot mismatch" >&2

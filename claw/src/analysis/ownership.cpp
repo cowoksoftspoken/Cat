@@ -141,12 +141,16 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
 
     if (auto* assign = dynamic_cast<AssignStmt*>(stmt)) {
         if (auto* ident = dynamic_cast<IdentExpr*>(assign->target.get())) {
+            const ResolvedType assignedValueType = assign->value ? typeOfExpr(assign->value.get()) : makeUnknownType();
             const auto it = varStates.find(ident->name);
             if (it != varStates.end() && assign->value) {
-                const bool consumeValue = !it->second.type.isView() && typeOfExpr(assign->value.get()).isOwned();
+                if (it->second.type.isUnknown() && !assignedValueType.isUnknown() && !assignedValueType.isOpaqueExternal()) {
+                    it->second.type = assignedValueType;
+                }
+                const bool consumeValue = !it->second.type.isView() && assignedValueType.isOwned();
                 checkExpr(assign->value.get(), consumeValue);
             } else if (assign->value) {
-                checkExpr(assign->value.get(), typeOfExpr(assign->value.get()).isOwned());
+                checkExpr(assign->value.get(), assignedValueType.isOwned());
             }
 
             if (it != varStates.end()) {

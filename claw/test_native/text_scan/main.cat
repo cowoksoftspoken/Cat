@@ -1,0 +1,16 @@
+realm main
+
+fn count_letter_l(text: look Text) -> Byte {
+    slot count: Byte = 0
+    scan item over text {
+        when item == 108 {
+            count = count + 1
+        }
+    }
+    give count
+}
+
+fn main() -> Int32 {
+    println(count_letter_l("hello"))
+    give 0
+}

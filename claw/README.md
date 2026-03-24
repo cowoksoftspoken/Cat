@@ -30,7 +30,7 @@ Implemented today:
 - static builtin method dispatch on core receivers such as `Text.len()`, `Text.slice(start, len)`, `Text.find_byte(b)`, `Bytes.byte_at(i)`, and mutable container methods like `reserve()`, `truncate()`, `shrink_to_fit()`, and `clear()`
 - builtin container generic arity enforcement for forms such as `Span of T`, `Vec of T`, `Table of K, V`, `Set of T`, `Heap of T`, and `Ring of T`
 - OIR as a structured in-memory model (`Program/Realm/Decl/Function/Block/Inst`) with textual printing layered on top
-- LIR as a backend-facing structured model derived from OIR, with CFG blocks, explicit stack objects, phi-like control joins, explicit builtin bounds checks with defect edges, explicit `lift` success/fail edges, explicit raw-region tagging, typed external call ABI/linkage metadata, explicit unsafe-boundary tagging, call kinds, and textual inspection via `emit-lir`
+- LIR as a backend-facing structured model derived from OIR, with CFG blocks, explicit stack objects, phi-like control joins, explicit builtin bounds checks with defect edges, explicit `lift` success/fail edges, explicit raw-region tagging, typed external call ABI/linkage metadata, explicit unsafe-boundary tagging, call kinds, and textual inspection via `lir`
 - canonical type layout, aggregate ABI pass classification, and symbol linkage metadata for named types and functions across OIR and LIR
 - typed dependency function contracts in `claw.toml`, including `raw` and `safe` external function signatures that flow into sema, OIR, and LIR
 - hardened foreign-ABI safety rules so non-`claw` safe external contracts only admit FFI-stable boundary types
@@ -40,7 +40,8 @@ Implemented today:
 - AIR, OIR, LIR, and initial LLVM IR textual emission for inspected lowering stages
 - LLVM backend split across internal backend units instead of continuing as one monolithic emitter file
 - separate frontend and backend regression suites
-- initial `build-native` support that can compile the current supported subset into Windows `.exe` files through `clang` plus a bundled runtime shim
+- initial `build` support that can compile the current supported subset into Windows `.exe` files through `clang` plus a bundled runtime shim
+- deferred mutable local type inference from first assignment, including view-safe propagation for borrowed locals
 
 Validated environment:
 - MSYS2 UCRT64
@@ -81,9 +82,10 @@ The initial LLVM backend is already alive for a strict subset:
 - ABI-accurate direct Claw aggregate lowering for current `indirect` shape paths, including hidden return slots, pointer-based aggregate parameters, and object stack slots
 - concrete shape field load/store lowering, including `store_field` for addressable objects such as `edit` views and aggregate locals
 - iterator lowering for the current slice-like iterables (`Span`, `Text`, `Bytes`) and direct loop-control lowering for `break` / `continue`
+- native regression coverage for loop control and Text-byte scanning on top of the current runtime subset
 - explicit backend rejection for raw-only / opaque external calls that have not yet been given a lowerable LLVM contract
-- textual LLVM IR emission through `claw emit-llvm ...`
-- initial native executable generation through `claw build-native ...`, validated today for the current supported subset including runtime printing, unit-return `main`, and imported direct calls
+- textual LLVM IR emission through `claw llvm ...`
+- initial native executable generation through `claw build ...`, validated today for the current supported subset including runtime printing, unit-return `main`, and imported direct calls
 
 Backend bring-up is validated today by assembling emitted IR with `llvm-as` and lowering it with `llc` for the current backend fixtures.
 
@@ -170,11 +172,12 @@ bash test_backend/run_backend_tests.sh
 Inspect lowering stages manually:
 
 ```bash
-claw emit-air path/to/file.cat
-claw emit-oir path/to/file.cat
-claw emit-lir path/to/file.cat
-claw emit-llvm path/to/file.cat
-claw build-native path/to/workspace
+claw validate path/to/workspace
+claw air path/to/file.cat
+claw oir path/to/file.cat
+claw lir path/to/file.cat
+claw llvm path/to/file.cat
+claw build path/to/workspace
 ```
 
 ## Repository Layout

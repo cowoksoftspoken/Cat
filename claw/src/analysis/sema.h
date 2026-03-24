@@ -93,7 +93,8 @@ private:
         bool isMutable,
         const std::string& duplicateMessage,
         const SourceSpan& duplicateSpan = {},
-        std::optional<size_t> viewSourceParamIndex = std::nullopt);
+        std::optional<size_t> viewSourceParamIndex = std::nullopt,
+        const BindingStmt* bindingDecl = nullptr);
     bool isConditionLike(const ResolvedType& type) const;
     bool blockDefinitelyTerminates(const BlockStmt* block) const;
     bool stmtDefinitelyTerminates(const Stmt* stmt) const;

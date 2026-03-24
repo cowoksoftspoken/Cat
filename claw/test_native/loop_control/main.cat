@@ -1,0 +1,22 @@
+realm main
+
+fn count(limit: Int32) -> Int32 {
+    slot i: Int32 = 0
+    slot total: Int32 = 0
+    loop i < limit {
+        i = i + 1
+        when i == 2 {
+            skip
+        }
+        when i == 5 {
+            stop
+        }
+        total = total + i
+    }
+    give total
+}
+
+fn main() -> Int32 {
+    println(count(7))
+    give 0
+}
