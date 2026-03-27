@@ -82,7 +82,7 @@ private:
     std::unique_ptr<RealmDecl> parseSourceFile(const std::filesystem::path& path, const std::string& source) const;
     ModuleManifest loadManifest(const std::filesystem::path& path);
     std::optional<ModuleManifest> tryLoadManifest(const std::filesystem::path& path);
-    void validateRealmPath(const LoadedUnit& unit) const;
+    void validateRealmPath(LoadedUnit& unit) const;
     ExportSummary buildExportSummary(const LoadedUnit& unit);
     size_t loadUnitRecursive(const std::filesystem::path& sourcePath);
     std::vector<ImportedBinding> resolveImports(const LoadedUnit& unit);
@@ -104,3 +104,5 @@ private:
 };
 
 } // namespace claw::frontend
+
+

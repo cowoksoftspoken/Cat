@@ -283,6 +283,63 @@ std::string typedExternalRawRequirementMessage(const Expr* callee) {
         "' is declared raw-only and requires an explicit raw block.";
 }
 
+std::string lowercaseAscii(std::string_view text) {
+    std::string lowered;
+    lowered.reserve(text.size());
+    for (const char c : text) {
+        lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    return lowered;
+}
+
+bool sameIdentifierIgnoringCase(std::string_view left, std::string_view right) {
+    return lowercaseAscii(left) == lowercaseAscii(right);
+}
+
+std::optional<std::string> findChoiceVariantName(const ChoiceInfo& choice, std::string_view requested) {
+    for (const auto& variantName : choice.variantOrder) {
+        if (sameIdentifierIgnoringCase(variantName, requested)) {
+            return variantName;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<ChoiceVariantInfo> resolveChoiceVariantInfo(
+    const ChoiceInfo& choice,
+    const ResolvedType& concreteType,
+    std::string_view variantName) {
+    const auto matchedName = findChoiceVariantName(choice, variantName);
+    if (!matchedName.has_value()) {
+        return std::nullopt;
+    }
+    const auto bindings = buildTypeBindings(choice.typeParams, concreteType.params);
+    const auto variantIt = choice.variants.find(*matchedName);
+    if (variantIt == choice.variants.end()) {
+        return std::nullopt;
+    }
+
+    ChoiceVariantInfo resolved;
+    for (const auto& payloadType : variantIt->second.payloadTypes) {
+        resolved.payloadTypes.push_back(substituteType(payloadType, bindings));
+    }
+    return resolved;
+}
+
+bool isOutcomeLikeChoice(const ChoiceInfo& choice) {
+    const auto okName = findChoiceVariantName(choice, "Ok");
+    const auto failName = findChoiceVariantName(choice, "Fail");
+    if (!okName.has_value() || !failName.has_value() || choice.variantOrder.size() != 2) {
+        return false;
+    }
+    const auto okIt = choice.variants.find(*okName);
+    const auto failIt = choice.variants.find(*failName);
+    if (okIt == choice.variants.end() || failIt == choice.variants.end()) {
+        return false;
+    }
+    return okIt->second.payloadTypes.size() == 1 && failIt->second.payloadTypes.size() == 1;
+}
+
 struct BuiltinMethodSpec {
     std::string receiverName;
     std::string methodName;
@@ -455,7 +512,19 @@ const FunctionSignature* SemanticAnalyzer::lookupCallableSignature(const Expr* c
 
 const ShapeInfo* SemanticAnalyzer::lookupShape(const std::string& name) const {
     const auto it = analysisResult.shapesByName.find(name);
-    return it != analysisResult.shapesByName.end() ? &it->second : nullptr;
+    if (it != analysisResult.shapesByName.end()) {
+        return &it->second;
+    }
+
+    const std::string canonical = canonicalTypeName(name);
+    if (canonical != name) {
+        const auto canonicalIt = analysisResult.shapesByName.find(canonical);
+        if (canonicalIt != analysisResult.shapesByName.end()) {
+            return &canonicalIt->second;
+        }
+    }
+
+    return nullptr;
 }
 
 std::optional<MethodSignature> SemanticAnalyzer::lookupMethodSignature(const Expr* callee) const {
@@ -481,7 +550,19 @@ std::optional<MethodSignature> SemanticAnalyzer::lookupMethodSignature(const Exp
 
 const ChoiceInfo* SemanticAnalyzer::lookupChoice(const std::string& name) const {
     const auto it = analysisResult.choicesByName.find(name);
-    return it != analysisResult.choicesByName.end() ? &it->second : nullptr;
+    if (it != analysisResult.choicesByName.end()) {
+        return &it->second;
+    }
+
+    const std::string canonical = canonicalTypeName(name);
+    if (canonical != name) {
+        const auto canonicalIt = analysisResult.choicesByName.find(canonical);
+        if (canonicalIt != analysisResult.choicesByName.end()) {
+            return &canonicalIt->second;
+        }
+    }
+
+    return nullptr;
 }
 
 const TargetSpec& SemanticAnalyzer::targetSpec() const {
@@ -644,9 +725,9 @@ void SemanticAnalyzer::registerImports(const RealmDecl* realm) {
     };
 
     for (const auto& imp : realm->imports) {
-        if (!imp.specificItems.empty()) {
-            for (const auto& item : imp.specificItems) {
-                registerImportedName(item);
+        if (!imp.items.empty()) {
+            for (const auto& item : imp.items) {
+                registerImportedName(item.alias.empty() ? item.name : item.alias);
             }
             continue;
         }
@@ -923,7 +1004,7 @@ void SemanticAnalyzer::analyzeFnDecl(FnDecl* fn) {
 
     if (currentSignature) {
         if (currentSignature->returnType.viewKind == "edit") {
-            reportError(fn, "Safe functions cannot return edit views. Return an owned value or a look view derived from a parameter.");
+            reportError(fn, "Safe functions cannot return ref mut views. Return an owned value or a ref view derived from a parameter.");
         }
         for (size_t i = 0; i < fn->params.size() && i < currentSignature->paramTypes.size(); ++i) {
             if (isRawAddressType(currentSignature->paramTypes[i])) {
@@ -989,7 +1070,11 @@ void SemanticAnalyzer::analyzeShapeDecl(ShapeDecl* shape) {
         info.fieldOrder.push_back(field.name);
     }
 
-    analysisResult.shapesByName[shape->name] = std::move(info);
+    analysisResult.shapesByName[shape->name] = info;
+    const std::string canonicalName = canonicalTypeName(shape->name);
+    if (canonicalName != shape->name) {
+        analysisResult.shapesByName[canonicalName] = info;
+    }
 }
 
 void SemanticAnalyzer::analyzeChoiceDecl(ChoiceDecl* choice) {
@@ -1014,7 +1099,11 @@ void SemanticAnalyzer::analyzeChoiceDecl(ChoiceDecl* choice) {
         info.variantOrder.push_back(variant.tag);
     }
 
-    analysisResult.choicesByName[choice->name] = std::move(info);
+    analysisResult.choicesByName[choice->name] = info;
+    const std::string canonicalName = canonicalTypeName(choice->name);
+    if (canonicalName != choice->name) {
+        analysisResult.choicesByName[canonicalName] = info;
+    }
 }
 
 void SemanticAnalyzer::analyzeBlock(BlockStmt* block) {
@@ -1081,6 +1170,90 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             bind->span,
             viewSourceParamIndex,
             bind);
+        return;
+    }
+
+    if (auto* tryStmt = dynamic_cast<TryStmt*>(stmt)) {
+        const ResolvedType declaredType = tryStmt->type ? resolveTypeNode(tryStmt->type.get(), {}) : makeUnknownType();
+        const ResolvedType outcomeType = analyzeExpr(tryStmt->expr.get());
+        ResolvedType okType = makeUnknownType();
+        ResolvedType failType = makeUnknownType();
+
+        if (tryStmt->isMutable) {
+            reportError(tryStmt, "`try` bindings currently require `val`. Mutable `var = try ...` is not supported yet.");
+        }
+
+        if (outcomeType.isOpaqueExternal()) {
+            reportError(tryStmt->expr.get(), opaqueExternalValueUseMessage(outcomeType, "try operand"));
+        } else if (!outcomeType.isUnknown()) {
+            if (outcomeType.name != "Outcome" || outcomeType.params.size() != 2) {
+                reportError(tryStmt->expr.get(), "`try` requires a Result value, got " + outcomeType.describe());
+            } else {
+                const auto* outcomeInfo = lookupChoice(outcomeType.name);
+                if (!outcomeInfo || !isOutcomeLikeChoice(*outcomeInfo)) {
+                    reportError(tryStmt->expr.get(), "`try` requires Result to define Ok(T) and Fail(E) single-payload variants.");
+                }
+                okType = outcomeType.params[0];
+                failType = outcomeType.params[1];
+            }
+        }
+
+        ResolvedType finalType = tryStmt->type ? declaredType : normalizeInferredLiteralType(okType);
+        if (tryStmt->type && !okType.isUnknown()) {
+            const bool matches = finalType.isView()
+                ? canBorrowAsView(okType, finalType)
+                : canAssignType(okType, finalType);
+            if (!matches) {
+                reportError(
+                    tryStmt,
+                    "`try` binding type mismatch for '" + tryStmt->name + "': expected " +
+                        finalType.describe() + ", got " + okType.describe());
+            }
+        }
+
+        if (tryStmt->autoPropagate) {
+            if (!currentSignature || currentSignature->returnType.name != "Outcome" || currentSignature->returnType.params.size() != 2) {
+                reportError(tryStmt, "`try` shorthand requires the current function to return Result[T, E].");
+            } else if (!failType.isUnknown()) {
+                const ResolvedType& currentFailType = currentSignature->returnType.params[1];
+                if (!sameType(failType, currentFailType)) {
+                    reportError(
+                        tryStmt,
+                        "`try` shorthand error type mismatch: expected " +
+                            currentFailType.describe() + ", got " + failType.describe());
+                }
+            }
+        } else {
+            if (!tryStmt->failBlock || tryStmt->failName.empty()) {
+                reportError(tryStmt, "`try ... else` requires a failure binding and block.");
+            } else {
+                if (!blockDefinitelyTerminates(tryStmt->failBlock.get())) {
+                    reportError(tryStmt, "`try ... else` failure block must terminate the current control path.");
+                }
+
+                scopes.enterScope();
+                defineVariable(
+                    tryStmt->failName,
+                    failType,
+                    false,
+                    "Duplicate try failure binding: " + tryStmt->failName,
+                    tryStmt->span);
+                analyzeBlock(tryStmt->failBlock.get());
+                scopes.exitScope();
+            }
+        }
+
+        if (rawDepth == 0 && isRawAddressType(finalType)) {
+            reportError(tryStmt, "Raw address values may only appear inside raw blocks.");
+        }
+
+        analysisResult.tryBindingTypes[tryStmt] = finalType;
+        defineVariable(
+            tryStmt->name,
+            finalType,
+            false,
+            "Duplicate variable declaration: " + tryStmt->name,
+            tryStmt->span);
         return;
     }
 
@@ -1159,7 +1332,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             }
 
             if (!canMutate) {
-                reportError(assign, "Member assignment requires mutable storage or an edit view.");
+                reportError(assign, "Member assignment requires mutable storage or a ref mut view.");
             }
 
             if (opaqueAssignedValue) {
@@ -1353,18 +1526,11 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             reportError(lift->expr.get(), opaqueExternalValueUseMessage(outcomeType, "lift operand"));
         } else if (!outcomeType.isUnknown()) {
             if (outcomeType.name != "Outcome" || outcomeType.params.size() != 2) {
-                reportError(lift->expr.get(), "'lift' requires an Outcome value, got " + outcomeType.describe());
+                reportError(lift->expr.get(), "'lift' requires a Result value, got " + outcomeType.describe());
             } else {
-                const auto* outcomeInfo = lookupChoice("Outcome");
-                const bool validOutcomeShape =
-                    outcomeInfo &&
-                    outcomeInfo->variantOrder.size() == 2 &&
-                    outcomeInfo->variants.contains("ok") &&
-                    outcomeInfo->variants.contains("fail") &&
-                    outcomeInfo->variants.at("ok").payloadTypes.size() == 1 &&
-                    outcomeInfo->variants.at("fail").payloadTypes.size() == 1;
-                if (!validOutcomeShape) {
-                    reportError(lift->expr.get(), "'lift' requires Outcome to define ok(T) and fail(E) single-payload variants.");
+                const auto* outcomeInfo = lookupChoice(outcomeType.name);
+                if (!outcomeInfo || !isOutcomeLikeChoice(*outcomeInfo)) {
+                    reportError(lift->expr.get(), "'lift' requires Result to define Ok(T) and Fail(E) single-payload variants.");
                 }
                 okType = outcomeType.params[0];
                 failType = outcomeType.params[1];
@@ -1519,6 +1685,46 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr, const ResolvedType* expec
         std::string opaqueExternalCallee;
 
         if (auto* calleeIdent = dynamic_cast<IdentExpr*>(call->callee.get())) {
+            if (expectedType && !expectedType->isUnknown() && !expectedType->isOpaqueExternal()) {
+                if (const auto* choiceInfo = lookupChoice(expectedType->name)) {
+                    if (const auto variantInfo = resolveChoiceVariantInfo(*choiceInfo, *expectedType, calleeIdent->name)) {
+                        if (call->args.size() != variantInfo->payloadTypes.size()) {
+                            reportError(
+                                call,
+                                "Constructor '" + calleeIdent->name + "' expects " +
+                                    std::to_string(variantInfo->payloadTypes.size()) + " argument(s), got " +
+                                    std::to_string(call->args.size()));
+                        }
+
+                        for (size_t i = 0; i < call->args.size(); ++i) {
+                            const ResolvedType* payloadType = i < variantInfo->payloadTypes.size()
+                                ? &variantInfo->payloadTypes[i]
+                                : nullptr;
+                            const ResolvedType argType = analyzeExpr(call->args[i].get(), payloadType);
+                            if (argType.isOpaqueExternal()) {
+                                reportError(call->args[i].get(), opaqueExternalValueUseMessage(argType, "constructor argument"));
+                                continue;
+                            }
+                            if (payloadType && !canPassArgumentType(call->args[i].get(), argType, *payloadType)) {
+                                reportError(
+                                    call->args[i].get(),
+                                    "Constructor argument type mismatch: expected " + payloadType->describe() +
+                                        ", got " + argType.describe());
+                            }
+                        }
+
+                        ChoiceConstructorInfo constructorInfo;
+                        constructorInfo.resultType = *expectedType;
+                        constructorInfo.variantName = findChoiceVariantName(*choiceInfo, calleeIdent->name).value_or(calleeIdent->name);
+                        constructorInfo.payloadTypes = variantInfo->payloadTypes;
+                        analysisResult.choiceConstructors[call] = std::move(constructorInfo);
+                        type = *expectedType;
+                        analysisResult.exprTypes[expr] = type;
+                        return type;
+                    }
+                }
+            }
+
             signature = lookupFunctionSignature(calleeIdent->name);
             if (!signature) {
                 const auto sym = lookupSymbol(calleeIdent->name);
@@ -1939,3 +2145,6 @@ bool SemanticAnalyzer::stmtDefinitelyTerminates(const Stmt* stmt) const {
 }
 
 } // namespace claw::frontend
+
+
+

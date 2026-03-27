@@ -2,3 +2,8 @@
 claw/build
 claw/build-ucrt64
 ideas
+revise
+claw/build-ucrt64-clang
+claw/*.o
+claw/test_native/*/build
+claw/build-native-tests

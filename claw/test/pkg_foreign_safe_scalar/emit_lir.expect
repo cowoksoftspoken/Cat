@@ -1,8 +1,0 @@
-lir.program entry main symbol main::main
-lir.realm main
-lir.fn main() -> Unit [void] [abi=claw link=internal symbol=main::main ffi=false]
-  block entry:
-    %t0 = call.external add(10_UInt32) : UInt32 hook external.c.native.add [abi=c dep=native symbol=add safe] [proven-safe]
-    alloc stack hold value : UInt32
-    store value <- %t0 : UInt32
-    call.runtime println(value) : Unit hook runtime.println [proven-safe]

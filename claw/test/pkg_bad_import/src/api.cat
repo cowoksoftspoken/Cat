@@ -1,5 +1,0 @@
-realm src.api
-
-share fn add(base: Int32, extra: Int32) -> Int32 {
-    give base + extra
-}

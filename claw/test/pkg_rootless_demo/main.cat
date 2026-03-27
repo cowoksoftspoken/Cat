@@ -1,7 +1,0 @@
-realm main
-
-import src.{util}
-
-fn main() -> Int32 {
-    give util.answer()
-}

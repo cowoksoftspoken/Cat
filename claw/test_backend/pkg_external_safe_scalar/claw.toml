@@ -1,7 +1,0 @@
-[project]
-name = "LLVMEXT"
-version = "0.1.0"
-edition = "2025"
-
-[dependencies]
-native = { version = "1.0.0", abi = "c", add = "safe fn add(value: Int32) -> Int32 {}" }

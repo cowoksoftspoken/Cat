@@ -1,0 +1,16 @@
+choice Result[T, E] {
+    Ok(value: T)
+    Fail(cause: E)
+}
+
+fn step(flag: Bool) -> Result[Int32, Str] {
+    if flag {
+        return Ok(7)
+    }
+    return Fail("bad")
+}
+
+fn bad(flag: Bool) {
+    val value = try step(flag)
+    println(value)
+}

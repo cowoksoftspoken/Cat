@@ -1,8 +1,0 @@
-realm main
-
-import native.{add}
-
-fn main() {
-    hold value = add(10_UInt32)
-    println(value)
-}

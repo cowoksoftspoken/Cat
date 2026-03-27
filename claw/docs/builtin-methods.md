@@ -1,81 +1,125 @@
 # Builtin Method Dispatch
 
-Current builtin method dispatch is static and compile-time only. There is no hidden dynamic dispatch.
+Builtin method dispatch is static and compile-time only. There is no hidden dynamic dispatch.
 
-## Text
+The revised language direction is **receiver-first**:
 
-- `len() -> USize`
-- `is_empty() -> Bool`
-- `byte_at(index: USize) -> Byte`
-- `first_byte() -> Byte`
-- `last_byte() -> Byte`
-- `find_byte(byte: Byte) -> ISize`
-- `count_byte(byte: Byte) -> USize`
-- `starts_with(prefix: look Text) -> Bool`
-- `ends_with(suffix: look Text) -> Bool`
-- `contains(part: look Text) -> Bool`
-- `contains_byte(byte: Byte) -> Bool`
-- `slice(start: USize, len: USize) -> look Text`
+```cat
+val numbers = Vec[Int32][1, 2, 3]
+val size = numbers.len()
+```
 
-## Bytes
+This file tracks the builtin subset that is already implemented in the compiler core, while the revised type surface is still being normalized.
 
-- `len() -> USize`
-- `is_empty() -> Bool`
-- `byte_at(index: USize) -> Byte`
-- `first_byte() -> Byte`
-- `last_byte() -> Byte`
-- `find_byte(byte: Byte) -> ISize`
-- `count_byte(byte: Byte) -> USize`
-- `starts_with(prefix: look Bytes) -> Bool`
-- `ends_with(suffix: look Bytes) -> Bool`
-- `contains(part: look Bytes) -> Bool`
-- `contains_byte(byte: Byte) -> Bool`
-- `slice(start: USize, len: USize) -> look Bytes`
-- `capacity() -> USize`
-- `has_capacity(min: USize) -> Bool`
-- `reserve(min: USize) -> Unit`
-- `truncate(len: USize) -> Unit`
-- `shrink_to_fit() -> Unit`
-- `clear() -> Unit`
+## Revised Direction
 
-## Vec
+- dispatch hangs off the receiver value, not helper namespaces
+- method availability is resolved by semantic analysis from the receiver type
+- dispatch stays static whenever possible to preserve `Fast`
+- borrow-sensitive methods must keep ownership and view tracking explicit
 
-- `len() -> USize`
-- `is_empty() -> Bool`
-- `capacity() -> USize`
-- `has_capacity(min: USize) -> Bool`
-- `reserve(min: USize) -> Unit`
-- `truncate(len: USize) -> Unit`
-- `shrink_to_fit() -> Unit`
-- `clear() -> Unit`
+## Current Implemented Receiver Groups
 
-## Table
+### Str
 
-- `len() -> USize`
-- `is_empty() -> Bool`
-- `capacity() -> USize`
-- `has_capacity(min: USize) -> Bool`
-- `reserve(min: USize) -> Unit`
-- `shrink_to_fit() -> Unit`
-- `clear() -> Unit`
+Current implemented subset:
+- `len()`
+- `is_empty()`
+- `byte_at(index)`
+- `first_byte()`
+- `last_byte()`
+- `find_byte(byte)`
+- `count_byte(byte)`
+- `starts_with(prefix)`
+- `ends_with(suffix)`
+- `contains(part)`
+- `contains_byte(byte)`
+- `slice(start, len)`
 
-## Set
+Notes:
+- the compiler core already treats string-like receivers as byte-backed
+- the final revised iteration story for `Str` is still pending
+- default iteration over `Str` values has not been switched to the final `Char`-first model yet
 
-- `len() -> USize`
-- `is_empty() -> Bool`
-- `capacity() -> USize`
-- `has_capacity(min: USize) -> Bool`
-- `reserve(min: USize) -> Unit`
-- `shrink_to_fit() -> Unit`
-- `clear() -> Unit`
+### Bytes
 
-## Ring
+Current implemented subset:
+- `len()`
+- `is_empty()`
+- `byte_at(index)`
+- `first_byte()`
+- `last_byte()`
+- `find_byte(byte)`
+- `count_byte(byte)`
+- `starts_with(prefix)`
+- `ends_with(suffix)`
+- `contains(part)`
+- `contains_byte(byte)`
+- `slice(start, len)`
+- `capacity()`
+- `has_capacity(min)`
+- `reserve(min)`
+- `truncate(len)`
+- `shrink_to_fit()`
+- `clear()`
 
-- `len() -> USize`
-- `is_empty() -> Bool`
-- `capacity() -> USize`
-- `has_capacity(min: USize) -> Bool`
-- `reserve(min: USize) -> Unit`
-- `truncate(len: USize) -> Unit`
-- `shrink_to_fit() -> Unit`
-- `clear() -> Unit`
+### Vec[T]
+
+Current implemented subset:
+- `len()`
+- `is_empty()`
+- `capacity()`
+- `has_capacity(min)`
+- `reserve(min)`
+- `truncate(len)`
+- `shrink_to_fit()`
+- `clear()`
+
+### Map[K, V]
+
+Current implemented subset:
+- `len()`
+- `is_empty()`
+- `capacity()`
+- `has_capacity(min)`
+- `reserve(min)`
+- `shrink_to_fit()`
+- `clear()`
+
+### Set[T]
+
+Current implemented subset:
+- `len()`
+- `is_empty()`
+- `capacity()`
+- `has_capacity(min)`
+- `reserve(min)`
+- `shrink_to_fit()`
+- `clear()`
+
+### Ring[T]
+
+Current implemented subset:
+- `len()`
+- `is_empty()`
+- `capacity()`
+- `has_capacity(min)`
+- `reserve(min)`
+- `truncate(len)`
+- `shrink_to_fit()`
+- `clear()`
+
+## Migration Notes
+
+This file is intentionally conservative.
+
+What is already true:
+- dispatch is static
+- receiver typing is checked in sema
+- mutable-only methods stay gated by mutable receiver rules
+- view-returning helpers keep ownership tracking involved
+
+What is not finished yet:
+- final revised naming for every receiver family
+- the final `Str` / `Char` iteration model
+- the broader receiver-first collection API planned in the revised PRD

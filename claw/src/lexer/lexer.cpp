@@ -8,8 +8,13 @@ namespace claw::frontend {
 Lexer::Lexer(std::string_view source) : source(source) {}
 
 char Lexer::peek() const {
-    if (isAtEnd()) return '\0';
-    return source[pos];
+    return peekAhead(0);
+}
+
+char Lexer::peekAhead(size_t offset) const {
+    const size_t index = pos + offset;
+    if (index >= source.length()) return '\0';
+    return source[index];
 }
 
 char Lexer::advance() {
@@ -27,18 +32,49 @@ bool Lexer::isAtEnd() const {
     return pos >= source.length();
 }
 
+bool Lexer::skipBlockComment() {
+    if (peek() != '/' || peekAhead(1) != '*') {
+        return false;
+    }
+
+    advance();
+    advance();
+    size_t depth = 1;
+    while (!isAtEnd() && depth > 0) {
+        if (peek() == '/' && peekAhead(1) == '*') {
+            advance();
+            advance();
+            ++depth;
+            continue;
+        }
+        if (peek() == '*' && peekAhead(1) == '/') {
+            advance();
+            advance();
+            --depth;
+            continue;
+        }
+        advance();
+    }
+    return true;
+}
+
 void Lexer::skipWhitespace() {
     while (!isAtEnd()) {
         const unsigned char c = static_cast<unsigned char>(peek());
         if (std::isspace(c)) {
             advance();
-        } else if (peek() == '/' && pos + 1 < source.length() && source[pos + 1] == '/') {
+            continue;
+        }
+        if (peek() == '/' && peekAhead(1) == '/') {
             while (!isAtEnd() && peek() != '\n') {
                 advance();
             }
-        } else {
-            break;
+            continue;
         }
+        if (skipBlockComment()) {
+            continue;
+        }
+        break;
     }
 }
 
@@ -62,15 +98,24 @@ Token Lexer::readIdentifierOrKeyword() {
     }
 
     static const std::unordered_map<std::string, TokenKind> keywords = {
-        {"fn", TokenKind::KwFn}, {"hold", TokenKind::KwHold}, {"slot", TokenKind::KwSlot},
-        {"give", TokenKind::KwGive}, {"when", TokenKind::KwWhen}, {"otherwise", TokenKind::KwOtherwise},
+        {"fn", TokenKind::KwFn}, {"val", TokenKind::KwVal}, {"var", TokenKind::KwVar},
+        {"hold", TokenKind::KwHold}, {"slot", TokenKind::KwSlot},
+        {"return", TokenKind::KwReturn}, {"give", TokenKind::KwGive},
+        {"if", TokenKind::KwIf}, {"else", TokenKind::KwElse},
+        {"when", TokenKind::KwWhen}, {"otherwise", TokenKind::KwOtherwise},
         {"loop", TokenKind::KwLoop}, {"scan", TokenKind::KwScan}, {"stop", TokenKind::KwStop},
         {"skip", TokenKind::KwSkip}, {"shape", TokenKind::KwShape}, {"choice", TokenKind::KwChoice},
-        {"realm", TokenKind::KwRealm}, {"import", TokenKind::KwImport}, {"share", TokenKind::KwShare},
-        {"super", TokenKind::KwSuper},
+        {"import", TokenKind::KwImport}, {"share", TokenKind::KwShare}, {"super", TokenKind::KwSuper},
+        {"pub", TokenKind::KwPub}, {"modules", TokenKind::KwModules},
         {"pick", TokenKind::KwPick}, {"lift", TokenKind::KwLift}, {"raw", TokenKind::KwRaw},
         {"as", TokenKind::KwAs}, {"over", TokenKind::KwOver}, {"of", TokenKind::KwOf},
-        {"fail", TokenKind::KwFail}, {"look", TokenKind::KwLook}, {"edit", TokenKind::KwEdit}
+        {"fail", TokenKind::KwFail}, {"ref", TokenKind::KwRef}, {"mut", TokenKind::KwMut},
+        {"look", TokenKind::KwLook}, {"edit", TokenKind::KwEdit}, {"try", TokenKind::KwTry},
+        {"foreign", TokenKind::KwForeign}, {"static", TokenKind::KwStatic},
+        {"contract", TokenKind::KwContract}, {"implements", TokenKind::KwImplements},
+        {"with", TokenKind::KwWith}, {"self", TokenKind::KwSelf},
+        {"true", TokenKind::KwTrue}, {"false", TokenKind::KwFalse},
+        {"realm", TokenKind::KwRealm}
     };
 
     const auto it = keywords.find(text);
@@ -93,8 +138,7 @@ Token Lexer::readNumber() {
     }
 
     bool isFloat = false;
-    if (!isAtEnd() && peek() == '.' && pos + 1 < source.length() &&
-        std::isdigit(static_cast<unsigned char>(source[pos + 1]))) {
+    if (!isAtEnd() && peek() == '.' && std::isdigit(static_cast<unsigned char>(peekAhead(1)))) {
         isFloat = true;
         text += advance();
         while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek()))) {
@@ -126,8 +170,7 @@ Token Lexer::readNumber() {
         }
     }
 
-    if (!isAtEnd() && peek() == '_' && pos + 1 < source.length() &&
-        std::isalpha(static_cast<unsigned char>(source[pos + 1]))) {
+    if (!isAtEnd() && peek() == '_' && std::isalpha(static_cast<unsigned char>(peekAhead(1)))) {
         text += advance();
         while (!isAtEnd() && (std::isalnum(static_cast<unsigned char>(peek())) || peek() == '_')) {
             text += advance();
@@ -289,3 +332,4 @@ std::vector<Token> Lexer::tokenize() {
 }
 
 } // namespace claw::frontend
+

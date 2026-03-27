@@ -24,9 +24,11 @@ private:
     bool checkAhead(size_t offset, TokenKind kind) const;
     bool match(TokenKind kind);
     const Token& consumeToken(TokenKind kind, const std::string& message);
+    const Token& consumeNameToken(const std::string& message);
     void consume(TokenKind kind, const std::string& message);
     bool isAtEnd() const;
-    bool isTypeArgumentSeparator() const;
+    bool isLegacyTypeArgumentSeparator() const;
+    bool isNameToken(TokenKind kind) const;
     bool matchNameOrKeyword();
     bool isTopLevelRecoveryPoint(TokenKind kind) const;
     bool isStatementRecoveryPoint(TokenKind kind) const;
@@ -37,6 +39,11 @@ private:
     [[noreturn]] void failAtCurrent(const std::string& message);
     [[noreturn]] void failAt(const Token& token, const std::string& message);
 
+    ImportDecl parseImportDeclaration();
+    ImportItem parseImportItem();
+    void parseTypeParameterList(std::vector<std::string>* out);
+    std::vector<std::unique_ptr<TypeNode>> parseBracketTypeArguments();
+
     std::unique_ptr<Decl> parseDeclaration();
     std::unique_ptr<FnDecl> parseFnDeclaration();
     std::unique_ptr<ShapeDecl> parseShapeDeclaration();
@@ -46,7 +53,7 @@ private:
     std::unique_ptr<BlockStmt> parseBlock();
     std::unique_ptr<Stmt> parseStatement();
     std::unique_ptr<GiveStmt> parseGive();
-    std::unique_ptr<BindingStmt> parseBinding(bool isMutable);
+    std::unique_ptr<Stmt> parseBinding(bool isMutable);
     std::unique_ptr<WhenStmt> parseWhen();
     std::unique_ptr<LoopStmt> parseLoop();
     std::unique_ptr<ScanStmt> parseScan();
@@ -61,3 +68,4 @@ private:
 };
 
 } // namespace claw::frontend
+

@@ -1,7 +1,0 @@
-realm main
-
-import term.{emit}
-
-fn main() {
-    emit("boot")
-}

@@ -1,5 +1,0 @@
-air.realm test.float_emit
-air.fn demo(scale: Float32) -> Float32
-  hold seeded: Float32 = 1e1 : Float32
-  hold precise: Float32 = 2.5e-1_Float32 : Float32
-  give ((scale + precise) + seeded) : Float32

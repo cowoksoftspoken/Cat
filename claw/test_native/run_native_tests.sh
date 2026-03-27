@@ -3,65 +3,40 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-CLAW_EXE="${CLAW_EXE:-$ROOT_DIR/build-ucrt64/claw.exe}"
-WORK_DIR="$ROOT_DIR/build-tests"
+if [[ -z "${CLAW_EXE:-}" ]]; then
+  if [[ -x "$ROOT_DIR/build-ucrt64-clang/claw-codex.exe" ]]; then
+    CLAW_EXE="$ROOT_DIR/build-ucrt64-clang/claw-codex.exe"
+  else
+    CLAW_EXE="$ROOT_DIR/build-ucrt64-clang/claw.exe"
+  fi
+fi
+export PATH="/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH"
 
 if [[ ! -x "$CLAW_EXE" ]]; then
   echo "missing compiler executable: $CLAW_EXE" >&2
   exit 1
 fi
 
-rm -rf "$WORK_DIR"
-mkdir -p "$WORK_DIR"
+BUILD_DIR="$ROOT_DIR/test_native/build"
+mkdir -p "$BUILD_DIR"
 
-normalize_text() {
-  tr -d '\r'
-}
+single_output="$BUILD_DIR/revise_single_file.exe"
+workspace_output="$BUILD_DIR/revise_workspace.exe"
 
-run_case() {
-  local input_path="$1"
-  local label="$2"
-  local expected_exit="$3"
-  local expected_output="$4"
-  local exe_path="$WORK_DIR/$label.exe"
-  local out_path="$WORK_DIR/$label.out"
+echo "[build/pass] test_native/revise_single_file.cat"
+"$CLAW_EXE" build "$ROOT_DIR/test_native/revise_single_file.cat" "$single_output" >/dev/null
 
-  echo "[build] $label"
-  "$CLAW_EXE" build "$ROOT_DIR/$input_path" "$exe_path" > "$WORK_DIR/$label.build.log"
+single_stdout="$("$single_output")"
+if [[ "$single_stdout" != "3" ]]; then
+  echo "revised single-file native build produced unexpected output: $single_stdout" >&2
+  exit 1
+fi
 
-  if [[ ! -f "$exe_path" ]]; then
-    echo "$label did not produce an executable" >&2
-    exit 1
-  fi
+echo "[build/pass] test_native/revise_workspace"
+"$CLAW_EXE" build "$ROOT_DIR/test_native/revise_workspace" "$workspace_output" >/dev/null
 
-  set +e
-  "$exe_path" > "$out_path"
-  local status=$?
-  set -e
-
-  local actual_output
-  actual_output="$(cat "$out_path" | normalize_text)"
-  if [[ "$status" -ne "$expected_exit" ]]; then
-    echo "$label exit code mismatch: expected $expected_exit, got $status" >&2
-    echo "--- output ---" >&2
-    printf '%s\n' "$actual_output" >&2
-    exit 1
-  fi
-
-  if [[ "$actual_output" != "$expected_output" ]]; then
-    echo "$label output mismatch" >&2
-    echo "--- expected ---" >&2
-    printf '%s\n' "$expected_output" >&2
-    echo "--- actual ---" >&2
-    printf '%s\n' "$actual_output" >&2
-    exit 1
-  fi
-}
-
-run_case "test_native/hello_runtime" "hello_runtime" 0 $'hello\n7'
-run_case "test_native/unit_main" "unit_main" 0 $'unit'
-run_case "test_native/import_program" "import_program" 0 $'7'
-run_case "test_native/loop_control" "loop_control" 0 $'8'
-run_case "test_native/text_scan" "text_scan" 0 $'2'
-
-echo "all native integration tests passed"
+workspace_stdout="$("$workspace_output")"
+if [[ "$workspace_stdout" != "36" ]]; then
+  echo "revised workspace native build produced unexpected output: $workspace_stdout" >&2
+  exit 1
+fi

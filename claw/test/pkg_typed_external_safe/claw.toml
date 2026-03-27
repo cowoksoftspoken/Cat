@@ -1,7 +1,0 @@
-[project]
-name = "TYPEDSAFE"
-version = "0.1.0"
-edition = "2025"
-
-[dependencies]
-term = { version = "1.0.0", abi = "claw", status = "safe fn status() -> Int32 {}", bump = "safe fn bump(value: Int32) -> Int32 {}" }

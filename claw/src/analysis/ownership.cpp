@@ -378,6 +378,43 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
         return;
     }
 
+    if (auto* tryStmt = dynamic_cast<TryStmt*>(stmt)) {
+        checkExpr(tryStmt->expr.get(), false);
+
+        const ResolvedType outcomeType = typeOfExpr(tryStmt->expr.get());
+        ResolvedType okType = makeUnknownType();
+        ResolvedType failType = makeUnknownType();
+        if (outcomeType.name == "Outcome" && outcomeType.params.size() == 2) {
+            okType = outcomeType.params[0];
+            failType = outcomeType.params[1];
+        }
+
+        if (semantic != nullptr) {
+            const auto typeIt = semantic->result().tryBindingTypes.find(tryStmt);
+            if (typeIt != semantic->result().tryBindingTypes.end()) {
+                okType = typeIt->second;
+            }
+        }
+
+        if (tryStmt->failBlock) {
+            const auto baseline = varStates;
+            enterScope(tryStmt->failBlock.get(), ScopeKind::Normal);
+            defineTrackedVar(
+                tryStmt->failName,
+                TrackedVar{failType, false, StorageState::Initialized, 0, false, std::nullopt});
+            for (auto& stmtInBlock : tryStmt->failBlock->statements) {
+                checkStmt(stmtInBlock.get());
+            }
+            exitScope();
+            varStates = baseline;
+        }
+
+        defineTrackedVar(
+            tryStmt->name,
+            TrackedVar{okType, false, StorageState::Initialized, 0, false, std::nullopt});
+        return;
+    }
+
     if (auto* raw = dynamic_cast<RawStmt*>(stmt)) {
         enterScope(raw->body.get(), ScopeKind::Normal);
         for (auto& stmtInBlock : raw->body->statements) {
@@ -674,7 +711,7 @@ bool OwnershipChecker::acquireBorrowToken(const BorrowToken& token, const AstNod
 
     if (token.viewKind == "look") {
         if (state.mutableBorrow) {
-            reportError(node, "Cannot create look view while edit view is active -> " + token.rootName);
+            reportError(node, "Cannot create ref view while ref mut view is active -> " + token.rootName);
             return false;
         }
         ++state.sharedBorrows;
@@ -683,7 +720,7 @@ bool OwnershipChecker::acquireBorrowToken(const BorrowToken& token, const AstNod
 
     if (token.viewKind == "edit") {
         if (state.mutableBorrow || state.sharedBorrows > 0) {
-            reportError(node, "Cannot create edit view while another view is active -> " + token.rootName);
+            reportError(node, "Cannot create ref mut view while another view is active -> " + token.rootName);
             return false;
         }
         state.mutableBorrow = true;

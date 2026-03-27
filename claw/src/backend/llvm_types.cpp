@@ -11,14 +11,25 @@ void LlvmEmitter::collectDecls() {
                 },
                 [&](const LirShape& shape) {
                     shapesByName[shape.name] = &shape;
+                    const std::string canonicalName = canonicalBackendTypeBase(shape.name);
+                    if (canonicalName != shape.name) {
+                        shapesByName[canonicalName] = &shape;
+                    }
                     std::unordered_map<std::string, size_t> fields;
                     for (size_t i = 0; i < shape.fields.size(); ++i) {
                         fields[shape.fields[i].name] = i;
                     }
-                    shapeFieldIndices[shape.name] = std::move(fields);
+                    shapeFieldIndices[shape.name] = fields;
+                    if (canonicalName != shape.name) {
+                        shapeFieldIndices[canonicalName] = fields;
+                    }
                 },
                 [&](const LirChoice& choice) {
                     choicesByName[choice.name] = &choice;
+                    const std::string canonicalName = canonicalBackendTypeBase(choice.name);
+                    if (canonicalName != choice.name) {
+                        choicesByName[canonicalName] = &choice;
+                    }
                 }
             }, decl);
         }
@@ -40,7 +51,7 @@ const LirFunction* LlvmEmitter::entryFunction() const {
 
 std::string LlvmEmitter::llvmType(const std::string& typeText) const {
     const std::string stripped = stripViewPrefix(typeText);
-    const std::string base = stripGenericArgs(stripped);
+    const std::string base = canonicalBackendTypeBase(stripGenericArgs(stripped));
 
     if (stripped == "Unit" || base == "Unit") return "void";
     if (stripped == "Bool" || base == "Bool") return "i1";
@@ -419,7 +430,7 @@ bool LlvmEmitter::usesBorrowPointerAbi(std::string_view typeText, AbiPassKind pa
     if (passKind != AbiPassKind::Borrow) {
         return false;
     }
-    const std::string baseType = stripGenericArgs(stripViewPrefix(typeText));
+    const std::string baseType = canonicalBackendTypeBase(stripGenericArgs(stripViewPrefix(typeText)));
     return shapesByName.contains(baseType) || choicesByName.contains(baseType);
 }
 

@@ -1,0 +1,7 @@
+fn square(value: Int32) -> Int32 {
+    return value * value
+}
+
+fn main() {
+    println(square(6))
+}

@@ -1,7 +1,0 @@
-[project]
-name = "OPAQUE_EXTERNAL"
-version = "0.1.0"
-edition = "2025"
-
-[dependencies]
-term = "1.0.0"

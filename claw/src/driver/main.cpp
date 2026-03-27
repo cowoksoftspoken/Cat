@@ -284,7 +284,7 @@ void validateEntryPoint(
     if (!entryFn) {
         claw::frontend::Diagnostic diagnostic;
         diagnostic.stage = "entry";
-        diagnostic.message = "Entry module must define `fn main() -> Int32` or `fn main()`.";
+        diagnostic.message = "Entry module must define `fn main()` with no parameters.";
         diagnostic.span = realm->span;
         diagnostic.path = unit.path.string();
         throw claw::frontend::DiagnosticError("Entry point validation failed.", {diagnostic});
@@ -292,12 +292,12 @@ void validateEntryPoint(
 
     const auto* signature = sema.lookupFunctionSignature(entryFn);
     const bool validReturn = signature &&
-        ((signature->returnType.name == "Int32" && signature->returnType.viewKind.empty()) ||
-         (signature->returnType.name == "Unit" && signature->returnType.viewKind.empty()));
+        signature->returnType.name == "Unit" &&
+        signature->returnType.viewKind.empty();
     if (!signature || !signature->paramTypes.empty() || !validReturn) {
         claw::frontend::Diagnostic diagnostic;
         diagnostic.stage = "entry";
-        diagnostic.message = "`main` must take no parameters and return Int32 or Unit.";
+        diagnostic.message = "`main` must take no parameters and return Unit implicitly or explicitly.";
         diagnostic.span = entryFn->span;
         diagnostic.path = unit.path.string();
         throw claw::frontend::DiagnosticError("Entry point validation failed.", {diagnostic});
@@ -474,12 +474,12 @@ int main(int argc, char** argv) {
                 std::cout << " for project " << project.config->name
                           << " (edition " << project.config->edition << ")";
             }
-            std::cout << ", entry realm: "
+            std::cout << ", entry module: "
                       << project.units[project.entryIndex].ast->name << "\n";
             return 0;
         }
 
-        std::cout << "Check passed for realm: " << project.units[project.entryIndex].ast->name
+        std::cout << "Check passed for module: " << project.units[project.entryIndex].ast->name
                   << "\n";
     } catch (const claw::frontend::DiagnosticError& e) {
         std::cerr << formatDiagnosticsWithSources(e.diagnostics(), diagnosticPath, source) << "\n";

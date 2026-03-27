@@ -7,26 +7,27 @@ namespace claw::frontend {
 
 enum class TokenKind {
     // Keywords
-    KwFn, KwHold, KwSlot, KwGive, KwWhen, KwOtherwise,
+    KwFn, KwVal, KwVar, KwHold, KwSlot, KwReturn, KwGive, KwIf, KwElse, KwWhen, KwOtherwise,
     KwLoop, KwScan, KwStop, KwSkip, KwShape, KwChoice,
-    KwRealm, KwImport, KwShare, KwSuper,
-    KwAs, KwOver, KwOf, KwFail, KwLook, KwEdit,
-    KwPick, KwLift, KwRaw,
+    KwImport, KwShare, KwSuper, KwPub, KwModules,
+    KwAs, KwOver, KwOf, KwFail, KwPick, KwLift, KwRaw,
+    KwRef, KwMut, KwLook, KwEdit, KwTry, KwForeign, KwStatic,
+    KwContract, KwImplements, KwWith, KwSelf, KwTrue, KwFalse, KwRealm,
 
     // Punctuation
-    LBracket, RBracket,    // [ ]
-    LBrace, RBrace,        // { }
-    LParen, RParen,        // ( )
-    Colon,                 // :
-    Equal,                 // =
-    Arrow,                 // ->
-    Comma,                 // ,
-    Dot,                   // .
-    Bang,                  // !
-    EqEq, NotEq,           // == !=
-    Less, LessEq,          // < <=
-    Greater, GreaterEq,    // > >=
-    Plus, Minus, Star, Slash, // + - * /
+    LBracket, RBracket,
+    LBrace, RBrace,
+    LParen, RParen,
+    Colon,
+    Equal,
+    Arrow,
+    Comma,
+    Dot,
+    Bang,
+    EqEq, NotEq,
+    Less, LessEq,
+    Greater, GreaterEq,
+    Plus, Minus, Star, Slash,
 
     // Literals/Identifiers
     Identifier,
@@ -60,9 +61,11 @@ private:
     size_t column = 1;
 
     char peek() const;
+    char peekAhead(size_t offset) const;
     char advance();
     bool isAtEnd() const;
     void skipWhitespace();
+    bool skipBlockComment();
 
     Token readIdentifierOrKeyword();
     Token readNumber();
@@ -77,3 +80,4 @@ private:
 };
 
 } // namespace claw::frontend
+

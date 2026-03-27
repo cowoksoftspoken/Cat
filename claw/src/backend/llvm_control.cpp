@@ -7,7 +7,7 @@ void LlvmEmitter::emitIterNext(
     std::string_view currentBlockLabel,
     FunctionState& state,
     std::vector<std::string>& lines) {
-    const std::string iterableBase = stripGenericArgs(stripViewPrefix(value.iterable.type));
+    const std::string iterableBase = canonicalBackendTypeBase(stripGenericArgs(stripViewPrefix(value.iterable.type)));
     if (iterableBase != "Span" && iterableBase != "Text" && iterableBase != "Bytes") {
         throw std::runtime_error(
             "LLVM lowering does not yet support iter_next over iterable type '" + value.iterable.type + "'.");
@@ -117,16 +117,16 @@ bool LlvmEmitter::emitLift(const LirLiftInst& value, FunctionState& state, std::
     }
 
     const auto okIt = std::find_if(choice->cases.begin(), choice->cases.end(), [](const ConcreteChoiceCaseInfo& item) {
-        return item.name == "ok";
+        return sameBackendIdentifier(item.name, "Ok");
     });
     const auto failIt = std::find_if(choice->cases.begin(), choice->cases.end(), [](const ConcreteChoiceCaseInfo& item) {
-        return item.name == "fail";
+        return sameBackendIdentifier(item.name, "Fail");
     });
     if (okIt == choice->cases.end() || failIt == choice->cases.end()) {
-        throw std::runtime_error("LLVM lowering requires lift choices to define ok(...) and fail(...) variants for type '" + value.value.type + "'.");
+        throw std::runtime_error("LLVM lowering requires lift choices to define Ok(...) and Fail(...) variants for type '" + value.value.type + "'.");
     }
     if (okIt->payloadTypes.size() != 1 || failIt->payloadTypes.size() != 1) {
-        throw std::runtime_error("LLVM lowering currently requires lift variants ok(...) and fail(...) to carry exactly one payload each for type '" + value.value.type + "'.");
+        throw std::runtime_error("LLVM lowering currently requires lift variants Ok(...) and Fail(...) to carry exactly one payload each for type '" + value.value.type + "'.");
     }
 
     const std::string liftedValue = ensureValue(value.value, state, lines);
@@ -136,18 +136,59 @@ bool LlvmEmitter::emitLift(const LirLiftInst& value, FunctionState& state, std::
     const size_t okIndex = static_cast<size_t>(std::distance(choice->cases.begin(), okIt));
     const std::string checkValue = state.temp("lift.is_ok");
     const std::string successLabel = value.successLabel.empty() ? state.inlineLabel("lift.ok") : blockLabel(value.successLabel);
-    const std::string failLabel = blockLabel(value.failLabel);
+    const std::string failLabel = value.autoPropagate
+        ? state.inlineLabel("try.fail")
+        : blockLabel(value.failLabel);
     lines.push_back("  " + checkValue + " = icmp eq i32 " + tagValue + ", " + std::to_string(okIndex));
     lines.push_back("  br i1 " + checkValue + ", label %" + successLabel + ", label %" + failLabel);
 
-    state.pendingChoiceBindings[value.failLabel].push_back(PendingChoiceBinding{value.value, "fail", {value.failName}});
+    if (value.autoPropagate) {
+        const auto returnChoice = resolveChoiceType(state.function.returnType);
+        if (!returnChoice.has_value()) {
+            throw std::runtime_error("LLVM lowering requires `try` shorthand functions to return Result-compatible types.");
+        }
+        const auto returnFailIt = std::find_if(returnChoice->cases.begin(), returnChoice->cases.end(), [](const ConcreteChoiceCaseInfo& item) {
+            return sameBackendIdentifier(item.name, "Fail");
+        });
+        if (returnFailIt == returnChoice->cases.end() || returnFailIt->payloadTypes.size() != 1) {
+            throw std::runtime_error("LLVM lowering requires propagated Result types to define Fail(E) with a single payload.");
+        }
+
+        const std::string failTempName = "__try_fail_" + std::to_string(state.nextInlineBlock++);
+        lines.push_back(failLabel + ":");
+        materializeChoiceBinding(PendingChoiceBinding{value.value, failIt->name, {failTempName}}, state, lines);
+
+        const std::string returnAddr = state.temp("try.fail.ret.addr");
+        const auto returnLayout = abiLayoutForType(state.function.returnType);
+        const size_t returnAlign = returnLayout.has_value() ? returnLayout->align : 1;
+        lines.push_back("  " + returnAddr + " = alloca " + llvmType(state.function.returnType) + ", align " + std::to_string(returnAlign));
+        constructChoiceValueAtAddress(
+            returnAddr,
+            state.function.returnType,
+            returnFailIt->name,
+            {LirValue{failTempName, returnFailIt->payloadTypes[0], false}},
+            state,
+            lines);
+
+        if (state.returnSlot.has_value()) {
+            const std::string operand = loadValueFromAddress(returnAddr, state.function.returnType, returnAlign, state, lines);
+            storeValueToAddress(*state.returnSlot, state.function.returnType, operand, returnAlign, lines);
+            lines.push_back("  ret void");
+        } else {
+            const std::string operand = loadValueFromAddress(returnAddr, state.function.returnType, returnAlign, state, lines);
+            lines.push_back("  ret " + llvmType(state.function.returnType) + " " + operand);
+        }
+    } else {
+        state.pendingChoiceBindings[value.failLabel].push_back(PendingChoiceBinding{value.value, failIt->name, {value.failName}});
+    }
+
     if (!value.successLabel.empty()) {
-        state.pendingChoiceBindings[value.successLabel].push_back(PendingChoiceBinding{value.value, "ok", {value.okName}});
+        state.pendingChoiceBindings[value.successLabel].push_back(PendingChoiceBinding{value.value, okIt->name, {value.okName}});
         return true;
     }
 
     lines.push_back(successLabel + ":");
-    materializeChoiceBinding(PendingChoiceBinding{value.value, "ok", {value.okName}}, state, lines);
+    materializeChoiceBinding(PendingChoiceBinding{value.value, okIt->name, {value.okName}}, state, lines);
     return false;
 }
 
@@ -164,7 +205,7 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
 
     const std::string receiverValue = ensureNamedValue(receiverName, state, lines);
     const std::string methodName = tailSegment(value.callee);
-    const std::string baseType = stripGenericArgs(stripViewPrefix(receiverType));
+    const std::string baseType = canonicalBackendTypeBase(stripGenericArgs(stripViewPrefix(receiverType)));
     const auto storeResultType = [&]() {
         if (value.result.has_value()) {
             state.valueTypes[*value.result] = value.type;

@@ -1,5 +1,0 @@
-realm test.parse_diagnostics
-
-fn broken(value: Int32 -> Int32 {
-    give value
-}

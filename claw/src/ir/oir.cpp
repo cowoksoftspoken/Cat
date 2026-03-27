@@ -383,6 +383,23 @@ OirValue lowerExpr(
         return OirValue{result, type, false};
     }
     if (auto* call = dynamic_cast<const CallExpr*>(expr)) {
+        if (const auto ctorIt = sema.result().choiceConstructors.find(call);
+            ctorIt != sema.result().choiceConstructors.end()) {
+            std::vector<OirValue> payloads;
+            payloads.reserve(call->args.size());
+            for (const auto& arg : call->args) {
+                payloads.push_back(lowerExpr(sema, arg.get(), context, blockIndex));
+            }
+
+            const std::string result = context.tempName();
+            appendInst(context, blockIndex, OirChoiceMakeInst{
+                result,
+                ctorIt->second.resultType.describe(),
+                ctorIt->second.variantName,
+                std::move(payloads)});
+            return OirValue{result, exprType(sema, expr), false};
+        }
+
         std::vector<OirValue> args;
         args.reserve(call->args.size());
         for (const auto& arg : call->args) {
@@ -559,6 +576,19 @@ std::optional<size_t> lowerStmt(
         return currentBlockIndex;
     }
 
+    if (auto* tryStmt = dynamic_cast<const TryStmt*>(stmt)) {
+        const OirValue value = lowerExpr(sema, tryStmt->expr.get(), context, currentBlockIndex);
+        if (tryStmt->autoPropagate) {
+            appendInst(context, currentBlockIndex, OirLiftInst{value, tryStmt->name, {}, {}, true});
+            return currentBlockIndex;
+        }
+
+        const std::string failLabel = context.blockName("try_fail");
+        appendInst(context, currentBlockIndex, OirLiftInst{value, tryStmt->name, tryStmt->failName, failLabel, false});
+        lowerBlock(sema, ownership, tryStmt->failBlock.get(), failLabel, context, {}, emitter);
+        return currentBlockIndex;
+    }
+
     if (auto* raw = dynamic_cast<const RawStmt*>(stmt)) {
         const std::string rawLabel = context.blockName("raw");
         const std::string contLabel = context.blockName("raw_cont");
@@ -596,7 +626,7 @@ std::string formatInst(const OirInst& inst, int indent) {
     return std::visit(Overloaded{
         [&](const OirHoldInst& value) {
             std::ostringstream out;
-            out << pad << (value.isMutable ? "slot " : "hold ") << value.name << ": " << value.type;
+            out << pad << (value.isMutable ? "var " : "val ") << value.name << ": " << value.type;
             if (value.init.has_value()) {
                 out << " = " << formatValue(*value.init);
             }
@@ -666,8 +696,24 @@ std::string formatInst(const OirInst& inst, int indent) {
         },
         [&](const OirLiftInst& value) {
             std::ostringstream out;
-            out << pad << "lift " << formatValue(value.value) << " -> " << value.okName
-                << ", fail " << value.failName << " -> " << value.failLabel << "\n";
+            out << pad << "try " << formatValue(value.value) << " -> " << value.okName;
+            if (value.autoPropagate) {
+                out << " propagate\n";
+            } else {
+                out << ", else " << value.failName << " -> " << value.failLabel << "\n";
+            }
+            return out.str();
+        },
+        [&](const OirChoiceMakeInst& value) {
+            std::ostringstream out;
+            out << pad << value.result << " = " << value.variantName << "(";
+            for (size_t i = 0; i < value.payloads.size(); ++i) {
+                if (i > 0) {
+                    out << ", ";
+                }
+                out << formatValue(value.payloads[i]);
+            }
+            out << ") : " << value.type << "\n";
             return out.str();
         },
         [&](const OirStopInst& value) {
@@ -988,7 +1034,7 @@ OirProgram buildOirProgram(std::string_view entryRealm, const std::vector<OirUni
 
 std::string formatOirRealm(const OirRealm& realm) {
     std::ostringstream out;
-    out << "oir.realm " << (realm.name.empty() ? std::string("<unknown>") : realm.name) << "\n";
+    out << "oir.module " << (realm.name.empty() ? std::string("<unknown>") : realm.name) << "\n";
     for (const auto& decl : realm.decls) {
         out << formatDecl(decl);
     }

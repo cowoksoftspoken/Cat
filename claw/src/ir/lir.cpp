@@ -480,13 +480,27 @@ LirFunction lowerFunction(const OirFunction& fn, const std::unordered_set<std::s
                     if (hasTrailingInsts) {
                         successLabel = currentBlock.label + ".lift_ok." + std::to_string(nextLift++);
                     }
-                    currentBlock.insts.push_back(LirLiftInst{lowerValue(value.value), value.okName, value.failName, successLabel, value.failLabel});
+                    currentBlock.insts.push_back(LirLiftInst{
+                        lowerValue(value.value),
+                        value.okName,
+                        value.failName,
+                        successLabel,
+                        value.failLabel,
+                        value.autoPropagate});
                     if (!successLabel.empty()) {
                         lowered.blocks.push_back(std::move(currentBlock));
                         currentBlock = LirBlock{};
                         currentBlock.label = successLabel;
                         currentBlock.rawRegion = block.rawRegion;
                     }
+                },
+                [&](const OirChoiceMakeInst& value) {
+                    std::vector<LirValue> payloads;
+                    payloads.reserve(value.payloads.size());
+                    for (const auto& payload : value.payloads) {
+                        payloads.push_back(lowerValue(payload));
+                    }
+                    currentBlock.insts.push_back(LirChoiceMakeInst{value.result, value.type, value.variantName, std::move(payloads)});
                 },
                 [&](const OirStopInst& value) {
                     currentBlock.insts.push_back(LirBreakInst{value.targetLabel.empty() ? std::string("<unresolved-break>") : value.targetLabel});
@@ -570,7 +584,7 @@ std::string formatInst(const LirInst& inst, int indent) {
     return std::visit(Overloaded{
         [&](const LirObjectInst& value) {
             std::ostringstream out;
-            out << pad << "alloc " << value.storage << ' ' << (value.isMutable ? "slot " : "hold ")
+            out << pad << "alloc " << value.storage << ' ' << (value.isMutable ? "var " : "val ")
                 << value.name << " : " << value.type << "\n";
             return out.str();
         },
@@ -662,11 +676,27 @@ std::string formatInst(const LirInst& inst, int indent) {
         },
         [&](const LirLiftInst& value) {
             std::ostringstream out;
-            out << pad << "lift " << formatValue(value.value) << " -> " << value.okName;
+            out << pad << "try " << formatValue(value.value) << " -> " << value.okName;
             if (!value.successLabel.empty()) {
                 out << ", success " << value.successLabel;
             }
-            out << ", fail " << value.failName << " -> " << value.failLabel << "\n";
+            if (value.autoPropagate) {
+                out << ", propagate\n";
+            } else {
+                out << ", else " << value.failName << " -> " << value.failLabel << "\n";
+            }
+            return out.str();
+        },
+        [&](const LirChoiceMakeInst& value) {
+            std::ostringstream out;
+            out << pad << value.result << " = " << value.variantName << '(';
+            for (size_t i = 0; i < value.payloads.size(); ++i) {
+                if (i > 0) {
+                    out << ", ";
+                }
+                out << formatValue(value.payloads[i]);
+            }
+            out << ") : " << value.type << "\n";
             return out.str();
         },
         [&](const LirBreakInst& value) {
@@ -864,7 +894,7 @@ LirProgram buildLirProgram(std::string_view entryRealm, const std::vector<OirUni
 
 std::string formatLirRealm(const LirRealm& realm) {
     std::ostringstream out;
-    out << "lir.realm " << (realm.name.empty() ? std::string("<unknown>") : realm.name) << "\n";
+    out << "lir.module " << (realm.name.empty() ? std::string("<unknown>") : realm.name) << "\n";
     for (const auto& decl : realm.decls) {
         out << formatDecl(decl);
     }

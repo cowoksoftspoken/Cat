@@ -2,35 +2,42 @@
 
 ## Immediate Technical Order
 
-1. Widen native executable coverage on top of the current LLVM/LIR contract.
-2. Lower richer aggregate/object cases and deeper `lift` / `pick` paths into LLVM IR now that scan/loop control, aggregate ABI, and the first native executable path are live.
-3. Keep whole-project lowering deterministic while tightening ownership edge cases that appear during backend and native integration.
-4. Expand typed raw / FFI contracts beyond function signatures into memory operations, effects, and pointer-oriented boundaries.
-5. Add concurrency-oriented safety layers and only then move into optimization work.
+1. Continue the revised-surface migration through the type and collection model.
+2. Replace remaining old user-facing terminology in sema, IR text, diagnostics, and docs.
+3. Prepare receiver-first builtin method dispatch around the revised collection story.
+4. Once the revised surface is stable enough, widen LLVM and native coverage again.
+5. Only after that continue deeper raw / FFI contracts, broader runtime paths, and later optimization work.
 
-## Current Native Status
+## Current Compiler Position
 
-The first native Windows executable pipeline is now alive because:
-- `build` produces `.exe` files for the current supported subset
-- `validate` keeps workspace graph checking explicit now that `build` is reserved for native output
-- the compiler emits a public native `@main` wrapper over the validated Claw entry symbol
-- the bundled runtime currently covers the runtime print/println subset used by native smoke tests
-- the native path is regression-tested separately in `test_native/`
-- frontend, backend IR snapshots, and native executable checks are now all green together
+Right now we have:
+- revised frontend syntax alive for `val`, `var`, `ref`, `if`, `return`, `Result`, and `try`
+- revised-only frontend, backend, and native test suites
+- LLVM IR emission still alive under the migration
+- native `.exe` generation alive for the current revised subset
+
+That means the repo is in a good state for the next wave:
+- the old tests are no longer polluting signal
+- the revised surface already has a verified foothold
+- backend work can continue later without dragging the legacy surface back in
 
 ## Next Session Focus
 
-1. Add a source-level aggregate construction / initialization path that stays ownership-safe instead of relaxing definite-init checks for partial field writes.
-2. Extend that construction story into choice / `Outcome` constructors where the expected type can resolve variants like `ok(...)` and `fail(...)` without ambiguity.
-3. Use those constructors to widen native coverage across aggregate passing, `pick`, and `lift` end-to-end.
-4. Keep broadening iterator and builtin coverage only where the LLVM/native path stays deterministic and the safety model remains explicit.
+The next wave should stay disciplined:
 
-## Next Native And LLVM Targets
+1. finish revised type names and collection terminology where the compiler still exposes old surface assumptions
+2. settle the next revised semantic areas in order, not all at once
+3. keep docs and tests aligned as each revised section lands
+4. defer receiver-first builtin API expansion until the revised type surface is ready enough to support it cleanly
 
-The most important expansions from here are:
-- broader aggregate lowering for nested shapes/choices beyond the first indirect object layer, including a source-level aggregate construction story that remains ownership-safe
-- deeper `lift` lowering beyond the initial concrete `Outcome` path, plus richer checked failure flow
-- deeper iterator coverage beyond the current slice-like iterable subset, with native coverage now extended to loop control and Text-byte scanning
-- broader builtin coverage beyond the current runtime print, safe external scalar, core `Text`, first aggregate object paths, and first loop/iterator paths
-- raw / foreign memory and effect boundaries with stronger typed contracts
-- broader native runtime coverage, packaging, and link behavior beyond the current validated subset
+## Known Migration Tension
+
+Two truths are important at the same time:
+- the compiler already has real LLVM and native paths
+- the revised language surface is still being normalized
+
+So the right strategy remains:
+- do not throw backend work away
+- do not let backend progress force us to freeze the wrong public syntax
+
+We keep the frontend surface deliberate first, then widen the backend again on top of that cleaner base.

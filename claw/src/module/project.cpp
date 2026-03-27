@@ -233,7 +233,7 @@ std::optional<FunctionSignature> parseDependencyFunctionSignature(
                 return std::nullopt;
             }
             if (signature.returnType.viewKind == "edit") {
-                pushContractDiagnostic(diagnostics, configPath, dependencyRoot, itemName, "safe contracts may not return edit views.");
+                pushContractDiagnostic(diagnostics, configPath, dependencyRoot, itemName, "safe contracts may not return ref mut views.");
                 return std::nullopt;
             }
             if (requiresFfiStableBoundary(dependency, contract)) {
@@ -417,18 +417,28 @@ ProjectLoader::ModuleManifest ProjectLoader::loadManifest(const std::filesystem:
         if (line.rfind("pub modules", 0) == 0) {
             const size_t braceOpen = line.find('{');
             const size_t braceClose = line.rfind('}');
-            if (braceOpen == std::string::npos || braceClose == std::string::npos || braceClose < braceOpen) {
-                diagnostics.push_back(Diagnostic{"manifest", "Expected 'pub modules {a, b}'.", {lineNumber, 1, line.size()}, normalized.string()});
+            if (braceOpen != std::string::npos || braceClose != std::string::npos) {
+                if (braceOpen == std::string::npos || braceClose == std::string::npos || braceClose < braceOpen) {
+                    diagnostics.push_back(Diagnostic{"manifest", "Expected 'pub modules {a, b}'.", {lineNumber, 1, line.size()}, normalized.string()});
+                    continue;
+                }
+
+                for (const auto& item : splitCommaList(std::string_view(line).substr(braceOpen + 1, braceClose - braceOpen - 1))) {
+                    if (!isIdentifier(item)) {
+                        diagnostics.push_back(Diagnostic{"manifest", "Invalid module name: '" + item + "'.", {lineNumber, braceOpen + 2, std::max<size_t>(1, item.size())}, normalized.string()});
+                        continue;
+                    }
+                    manifest.publishedModules.insert(item);
+                }
                 continue;
             }
 
-            for (const auto& item : splitCommaList(std::string_view(line).substr(braceOpen + 1, braceClose - braceOpen - 1))) {
-                if (!isIdentifier(item)) {
-                    diagnostics.push_back(Diagnostic{"manifest", "Invalid module name: '" + item + "'.", {lineNumber, braceOpen + 2, std::max<size_t>(1, item.size())}, normalized.string()});
-                    continue;
-                }
-                manifest.publishedModules.insert(item);
+            const std::string single = trim(std::string_view(line).substr(std::string_view("pub modules").size()));
+            if (!isIdentifier(single)) {
+                diagnostics.push_back(Diagnostic{"manifest", "Expected 'pub modules name' or 'pub modules {a, b}'.", {lineNumber, 1, line.size()}, normalized.string()});
+                continue;
             }
+            manifest.publishedModules.insert(single);
             continue;
         }
 
@@ -573,8 +583,8 @@ std::filesystem::path ProjectLoader::resolveSiblingModule(
     return candidate;
 }
 
-void ProjectLoader::validateRealmPath(const LoadedUnit& unit) const {
-    if (!project.structuredPackage || !unit.ast) {
+void ProjectLoader::validateRealmPath(LoadedUnit& unit) const {
+    if (!unit.ast) {
         return;
     }
 
@@ -595,13 +605,14 @@ void ProjectLoader::validateRealmPath(const LoadedUnit& unit) const {
     }
 
     if (unit.ast->name.empty()) {
-        throwDiagnostic(unit.path, "module", "Missing realm declaration. Expected realm '" + expectedRealm + "'.", unit.ast->span);
+        unit.ast->name = expectedRealm;
+        return;
     }
-    if (unit.ast->name != expectedRealm) {
+    if (project.structuredPackage && unit.ast->name != expectedRealm) {
         throwDiagnostic(
             unit.path,
             "module",
-            "Realm path mismatch: expected '" + expectedRealm + "', got '" + unit.ast->name + "'.",
+            "Module path mismatch: expected '" + expectedRealm + "', got '" + unit.ast->name + "'.",
             unit.ast->span);
     }
 }
@@ -700,7 +711,7 @@ size_t ProjectLoader::loadUnitRecursive(const std::filesystem::path& sourcePath)
         return existing->second;
     }
     if (loadStack.find(key) != loadStack.end()) {
-        throwDiagnostic(normalized, "module", "Cyclic realm dependency detected.");
+        throwDiagnostic(normalized, "module", "Cyclic module dependency detected.");
     }
 
     loadStack.insert(key);
@@ -709,6 +720,9 @@ size_t ProjectLoader::loadUnitRecursive(const std::filesystem::path& sourcePath)
     unit.path = normalized;
     unit.source = readFileText(normalized);
     unit.ast = parseSourceFile(normalized, unit.source);
+    if (unit.ast && unit.ast->name.empty() && !project.structuredPackage) {
+        unit.ast->name = normalized.stem().string();
+    }
     validateRealmPath(unit);
 
     project.units.push_back(std::move(unit));
@@ -725,6 +739,10 @@ std::vector<ImportedBinding> ProjectLoader::resolveImports(const LoadedUnit& uni
     std::vector<ImportedBinding> bindings;
     const auto importerPath = unit.path;
     const auto imports = unit.ast ? unit.ast->imports : std::vector<ImportDecl>{};
+
+    auto importedItemName = [](const ImportItem& item) {
+        return item.alias.empty() ? item.name : item.alias;
+    };
 
     auto makeModuleBinding = [&](const std::string& name, size_t unitIndex) {
         ImportedBinding binding;
@@ -817,9 +835,11 @@ std::vector<ImportedBinding> ProjectLoader::resolveImports(const LoadedUnit& uni
 
     for (const auto& imp : imports) {
         if (imp.isSuper) {
-            for (const auto& item : imp.specificItems) {
-                const size_t moduleIndex = loadUnitRecursive(resolveSiblingModule(importerPath, item, imp.span));
-                bindings.push_back(makeModuleBinding(item, moduleIndex));
+            for (const auto& item : imp.items) {
+                const size_t moduleIndex = loadUnitRecursive(resolveSiblingModule(importerPath, item.name, imp.span));
+                auto binding = makeModuleBinding(item.name, moduleIndex);
+                binding.name = importedItemName(item);
+                bindings.push_back(std::move(binding));
             }
             continue;
         }
@@ -832,7 +852,7 @@ std::vector<ImportedBinding> ProjectLoader::resolveImports(const LoadedUnit& uni
                 "Workspace entry 'main.cat' cannot be imported or treated as a module surface.",
                 imp.span);
         }
-        if (imp.specificItems.empty()) {
+        if (imp.items.empty()) {
             const auto resolved = tryResolveRealmFile(baseSegments);
             if (resolved.has_value()) {
                 const size_t moduleIndex = loadUnitRecursive(resolved.value());
@@ -850,16 +870,18 @@ std::vector<ImportedBinding> ProjectLoader::resolveImports(const LoadedUnit& uni
         if (baseModule.has_value()) {
             const size_t baseIndex = loadUnitRecursive(baseModule.value());
             const auto summary = buildExportSummary(project.units[baseIndex]);
-            for (const auto& item : imp.specificItems) {
-                const auto it = summary.sharedItems.find(item);
+            for (const auto& item : imp.items) {
+                const auto it = summary.sharedItems.find(item.name);
                 if (it == summary.sharedItems.end()) {
                     throwDiagnostic(
                         importerPath,
                         "module",
-                        "Module '" + imp.modulePath + "' does not share item '" + item + "'.",
+                        "Module '" + imp.modulePath + "' does not share item '" + item.name + "'.",
                         imp.span);
                 }
-                bindings.push_back(it->second);
+                auto binding = it->second;
+                binding.name = importedItemName(item);
+                bindings.push_back(std::move(binding));
             }
             continue;
         }
@@ -867,31 +889,36 @@ std::vector<ImportedBinding> ProjectLoader::resolveImports(const LoadedUnit& uni
         std::vector<std::string> namespaceSegments = baseSegments;
         if (const auto namespaceDir = tryResolveNamespaceDir(namespaceSegments)) {
             const auto namespaceManifest = tryLoadManifest(namespaceDir.value() / "modules.cat");
-            for (const auto& item : imp.specificItems) {
-                if (!namespaceManifest.has_value() || namespaceManifest->publishedModules.find(item) == namespaceManifest->publishedModules.end()) {
+            for (const auto& item : imp.items) {
+                if (!namespaceManifest.has_value() || namespaceManifest->publishedModules.find(item.name) == namespaceManifest->publishedModules.end()) {
                     throwDiagnostic(
                         importerPath,
                         "module",
-                        "Namespace '" + imp.modulePath + "' does not publish module '" + item + "'.",
+                        "Namespace '" + imp.modulePath + "' does not publish module '" + item.name + "'.",
                         imp.span);
                 }
-                const auto childFile = normalizePath(namespaceDir.value() / (item + ".cat"));
+                const auto childFile = normalizePath(namespaceDir.value() / (item.name + ".cat"));
                 if (!std::filesystem::exists(childFile)) {
-                    throwDiagnostic(importerPath, "module", "Missing module file for '" + imp.modulePath + "." + item + "'.", imp.span);
+                    throwDiagnostic(importerPath, "module", "Missing module file for '" + imp.modulePath + "." + item.name + "'.", imp.span);
                 }
                 const size_t moduleIndex = loadUnitRecursive(childFile);
-                bindings.push_back(makeModuleBinding(item, moduleIndex));
+                auto binding = makeModuleBinding(item.name, moduleIndex);
+                binding.name = importedItemName(item);
+                bindings.push_back(std::move(binding));
             }
             continue;
         }
 
         if (isExternalRoot(baseSegments)) {
-            for (const auto& item : imp.specificItems) {
-                if (std::isupper(static_cast<unsigned char>(item.front())) != 0) {
-                    bindings.push_back(ImportedBinding{item, SymbolKind::Shape});
+            for (const auto& item : imp.items) {
+                ImportedBinding binding;
+                if (!item.name.empty() && std::isupper(static_cast<unsigned char>(item.name.front())) != 0) {
+                    binding = ImportedBinding{item.name, SymbolKind::Shape};
                 } else {
-                    bindings.push_back(resolveDependencyFunctionBinding(baseSegments.front(), item));
+                    binding = resolveDependencyFunctionBinding(baseSegments.front(), item.name);
                 }
+                binding.name = importedItemName(item);
+                bindings.push_back(std::move(binding));
             }
             continue;
         }
@@ -988,5 +1015,11 @@ LoadedProject ProjectLoader::load(const std::filesystem::path& inputPath) {
 }
 
 } // namespace claw::frontend
+
+
+
+
+
+
 
 

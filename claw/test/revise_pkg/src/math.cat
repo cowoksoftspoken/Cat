@@ -1,0 +1,3 @@
+share fn add(left: Int32, right: Int32) -> Int32 {
+    return left + right
+}

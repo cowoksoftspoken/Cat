@@ -260,7 +260,7 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
                     const std::string operandType = llvmType(value.left.type);
                     const std::string left = ensureValue(value.left, state, blockLines);
                     const std::string right = ensureValue(value.right, state, blockLines);
-                    const std::string baseType = stripGenericArgs(stripViewPrefix(value.left.type));
+                    const std::string baseType = canonicalBackendTypeBase(stripGenericArgs(stripViewPrefix(value.left.type)));
                     std::ostringstream line;
                     line << "  " << localName(value.result) << " = ";
                     if (value.op == "add") {
@@ -344,6 +344,9 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
                         hasTerminator = true;
                     }
                 },
+                [&](const LirChoiceMakeInst& value) {
+                    emitChoiceMakeInst(value, state, blockLines);
+                },
                 [&](const LirBreakInst& value) {
                     blockLines.push_back("  br label %" + blockLabel(value.targetLabel));
                     hasTerminator = true;
@@ -359,7 +362,13 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
             out << line << "\n";
         }
         if (!hasTerminator) {
-            if (blockIndex + 1 < fn.blocks.size()) {
+            const bool nextBlockAcceptsFallthrough =
+                blockIndex + 1 < fn.blocks.size() &&
+                std::find(
+                    fn.blocks[blockIndex + 1].predecessors.begin(),
+                    fn.blocks[blockIndex + 1].predecessors.end(),
+                    block.label) != fn.blocks[blockIndex + 1].predecessors.end();
+            if (nextBlockAcceptsFallthrough) {
                 out << "  br label %" << blockLabel(fn.blocks[blockIndex + 1].label) << "\n";
             } else if (llvmFunctionReturnType(fn) == "void") {
                 out << "  ret void\n";

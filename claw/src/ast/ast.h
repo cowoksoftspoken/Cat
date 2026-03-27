@@ -20,6 +20,11 @@ struct TypeNode : public AstNode {
     std::vector<std::unique_ptr<TypeNode>> params;
 };
 
+struct ImportItem {
+    std::string name;
+    std::string alias;
+};
+
 struct Expr : public AstNode {};
 
 struct BoolExpr : public Expr {
@@ -82,6 +87,16 @@ struct BindingStmt : public Stmt {
     std::string name;
     std::unique_ptr<TypeNode> type;
     std::unique_ptr<Expr> value;
+};
+
+struct TryStmt : public Stmt {
+    bool isMutable = false;
+    std::string name;
+    std::unique_ptr<TypeNode> type;
+    std::unique_ptr<Expr> expr;
+    bool autoPropagate = false;
+    std::string failName;
+    std::unique_ptr<BlockStmt> failBlock;
 };
 
 struct WhenStmt : public Stmt {
@@ -172,7 +187,7 @@ struct ChoiceDecl : public Decl {
 struct ImportDecl {
     SourceSpan span;
     std::string modulePath;
-    std::vector<std::string> specificItems;
+    std::vector<ImportItem> items;
     bool isSuper = false;
 };
 
@@ -183,3 +198,4 @@ struct RealmDecl : public AstNode {
 };
 
 } // namespace claw::frontend
+

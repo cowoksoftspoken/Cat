@@ -14,8 +14,10 @@ namespace claw::frontend {
 
 struct TypeNode;
 struct Expr;
+struct CallExpr;
 struct FnDecl;
 struct BindingStmt;
+struct TryStmt;
 struct ScanStmt;
 struct ModuleInfo;
 
@@ -179,10 +181,18 @@ struct ModuleInfo {
     std::unordered_map<std::string, ImportedBinding> exportedItems;
 };
 
+struct ChoiceConstructorInfo {
+    ResolvedType resultType;
+    std::string variantName;
+    std::vector<ResolvedType> payloadTypes;
+};
+
 struct AnalysisResult {
     std::unordered_map<const Expr*, ResolvedType> exprTypes;
     std::unordered_map<const BindingStmt*, ResolvedType> bindingTypes;
+    std::unordered_map<const TryStmt*, ResolvedType> tryBindingTypes;
     std::unordered_map<const ScanStmt*, ResolvedType> scanItemTypes;
+    std::unordered_map<const CallExpr*, ChoiceConstructorInfo> choiceConstructors;
     std::unordered_map<const FnDecl*, FunctionSignature> functionSignatures;
     std::unordered_map<std::string, FunctionSignature> functionsByName;
     std::unordered_map<std::string, ShapeInfo> shapesByName;
@@ -213,6 +223,7 @@ private:
 };
 
 ResolvedType makeUnknownType(const std::string& name = "");
+std::string canonicalTypeName(std::string_view name);
 ResolvedType makeOpaqueExternalType(const std::string& name = "");
 ResolvedType adaptMemberType(const ResolvedType& baseType, const ResolvedType& fieldType);
 std::unordered_map<std::string, ResolvedType> buildTypeBindings(

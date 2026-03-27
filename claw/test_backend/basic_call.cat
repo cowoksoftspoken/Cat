@@ -1,9 +1,0 @@
-realm test_backend.basic_call
-
-fn add(left: Int32, right: Int32) -> Int32 {
-    give left + right
-}
-
-fn main() -> Int32 {
-    give add(20, 22)
-}

@@ -133,6 +133,14 @@ struct LirLiftInst {
     std::string failName;
     std::string successLabel;
     std::string failLabel;
+    bool autoPropagate = false;
+};
+
+struct LirChoiceMakeInst {
+    std::string result;
+    std::string type;
+    std::string variantName;
+    std::vector<LirValue> payloads;
 };
 
 struct LirBreakInst {
@@ -197,6 +205,7 @@ using LirInst = std::variant<
     LirIterNextInst,
     LirSwitchInst,
     LirLiftInst,
+    LirChoiceMakeInst,
     LirBreakInst,
     LirContinueInst,
     LirCallInst,

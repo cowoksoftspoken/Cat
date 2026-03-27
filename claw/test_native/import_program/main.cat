@@ -1,8 +1,0 @@
-realm main
-
-import app.{math}
-
-fn main() -> Int32 {
-    println(math.answer())
-    give 0
-}

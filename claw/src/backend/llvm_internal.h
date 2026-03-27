@@ -37,15 +37,49 @@ inline std::string trim(std::string_view text) {
 }
 
 inline std::string stripViewPrefix(std::string_view type) {
-    if (type.rfind("look ", 0) == 0 || type.rfind("edit ", 0) == 0) {
-        return trim(type.substr(5));
+    const std::string trimmed = trim(type);
+    if (trimmed.rfind("ref mut ", 0) == 0) {
+        return trim(std::string_view(trimmed).substr(8));
     }
-    return trim(type);
+    if (trimmed.rfind("ref ", 0) == 0) {
+        return trim(std::string_view(trimmed).substr(4));
+    }
+    if (trimmed.rfind("look ", 0) == 0 || trimmed.rfind("edit ", 0) == 0) {
+        return trim(std::string_view(trimmed).substr(5));
+    }
+    return trimmed;
 }
 
 inline std::string stripGenericArgs(std::string_view type) {
-    const size_t pos = type.find(" of ");
-    return pos == std::string_view::npos ? std::string(type) : trim(type.substr(0, pos));
+    const std::string trimmed = trim(type);
+    const size_t bracketPos = trimmed.find('[');
+    if (bracketPos != std::string_view::npos) {
+        return trim(std::string_view(trimmed).substr(0, bracketPos));
+    }
+    const size_t ofPos = trimmed.find(" of ");
+    return ofPos == std::string_view::npos ? trimmed : trim(std::string_view(trimmed).substr(0, ofPos));
+}
+
+inline std::string canonicalBackendTypeBase(std::string_view base) {
+    const std::string trimmed = trim(base);
+    if (trimmed == "Str") return "Text";
+    if (trimmed == "Char") return "Rune";
+    if (trimmed == "Map") return "Table";
+    if (trimmed == "Result") return "Outcome";
+    return trimmed;
+}
+
+inline std::string lowercaseBackendIdentifier(std::string_view text) {
+    std::string lowered;
+    lowered.reserve(text.size());
+    for (const char c : text) {
+        lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    return lowered;
+}
+
+inline bool sameBackendIdentifier(std::string_view left, std::string_view right) {
+    return lowercaseBackendIdentifier(left) == lowercaseBackendIdentifier(right);
 }
 
 inline bool isStringLiteral(std::string_view text) {
@@ -191,26 +225,44 @@ inline size_t roundUpTo(size_t value, size_t align) {
 
 inline std::vector<std::string> splitTypeArgs(std::string_view text) {
     std::vector<std::string> args;
+    size_t bracketDepth = 0;
     size_t start = 0;
-    while (start <= text.size()) {
-        const size_t comma = text.find(',', start);
-        const size_t end = comma == std::string_view::npos ? text.size() : comma;
-        args.push_back(trim(text.substr(start, end - start)));
-        if (comma == std::string_view::npos) {
-            break;
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (c == '[') {
+            ++bracketDepth;
+            continue;
         }
-        start = comma + 1;
+        if (c == ']') {
+            bracketDepth = bracketDepth == 0 ? 0 : bracketDepth - 1;
+            continue;
+        }
+        if (c == ',' && bracketDepth == 0) {
+            args.push_back(trim(text.substr(start, i - start)));
+            start = i + 1;
+        }
+    }
+    if (start <= text.size()) {
+        args.push_back(trim(text.substr(start)));
     }
     return args;
 }
 
 inline ParsedTypeName parseTypeName(std::string_view typeText) {
     const std::string stripped = trim(stripViewPrefix(typeText));
+    const size_t bracketPos = stripped.find('[');
+    if (bracketPos != std::string::npos && stripped.back() == ']') {
+        return ParsedTypeName{
+            canonicalBackendTypeBase(stripped.substr(0, bracketPos)),
+            splitTypeArgs(trim(stripped.substr(bracketPos + 1, stripped.size() - bracketPos - 2)))};
+    }
     const size_t ofPos = stripped.find(" of ");
     if (ofPos == std::string::npos) {
-        return ParsedTypeName{stripped, {}};
+        return ParsedTypeName{canonicalBackendTypeBase(stripped), {}};
     }
-    return ParsedTypeName{trim(stripped.substr(0, ofPos)), splitTypeArgs(trim(stripped.substr(ofPos + 4)))};
+    return ParsedTypeName{
+        canonicalBackendTypeBase(trim(stripped.substr(0, ofPos))),
+        splitTypeArgs(trim(stripped.substr(ofPos + 4)))};
 }
 
 inline std::string joinTypeArgs(const std::vector<std::string>& args) {
@@ -228,8 +280,10 @@ inline std::string substituteTypeText(
     std::string_view typeText,
     const std::unordered_map<std::string, std::string>& bindings) {
     const std::string prefix =
-        typeText.rfind("look ", 0) == 0 ? std::string("look ") :
-        (typeText.rfind("edit ", 0) == 0 ? std::string("edit ") : std::string{});
+        typeText.rfind("ref mut ", 0) == 0 ? std::string("ref mut ") :
+        (typeText.rfind("ref ", 0) == 0 ? std::string("ref ") :
+        (typeText.rfind("look ", 0) == 0 ? std::string("look ") :
+        (typeText.rfind("edit ", 0) == 0 ? std::string("edit ") : std::string{})));
     const ParsedTypeName parsed = parseTypeName(typeText);
     if (parsed.args.empty()) {
         const auto it = bindings.find(parsed.base);
@@ -241,7 +295,7 @@ inline std::string substituteTypeText(
     for (const auto& arg : parsed.args) {
         substitutedArgs.push_back(substituteTypeText(arg, bindings));
     }
-    return prefix + parsed.base + " of " + joinTypeArgs(substitutedArgs);
+    return prefix + parsed.base + "[" + joinTypeArgs(substitutedArgs) + "]";
 }
 
 inline std::string choiceStorageType(size_t tagSizeBytes, size_t payloadOffsetBytes, size_t payloadSizeBytes) {
@@ -430,9 +484,17 @@ private:
         std::string_view currentBlockLabel,
         FunctionState& state,
         std::vector<std::string>& lines);
+    void constructChoiceValueAtAddress(
+        std::string_view address,
+        const std::string& typeText,
+        std::string_view variantName,
+        const std::vector<LirValue>& payloads,
+        FunctionState& state,
+        std::vector<std::string>& lines);
     void emitBoundsCheck(const LirBoundsCheckInst& value, FunctionState& state, std::vector<std::string>& lines);
     void emitSwitch(const LirSwitchInst& value, FunctionState& state, std::vector<std::string>& lines);
     bool emitLift(const LirLiftInst& value, FunctionState& state, std::vector<std::string>& lines);
+    void emitChoiceMakeInst(const LirChoiceMakeInst& value, FunctionState& state, std::vector<std::string>& lines);
     void emitBuiltinCall(const LirCallInst& value, FunctionState& state, std::vector<std::string>& lines);
     void emitCallInst(const LirCallInst& value, FunctionState& state, std::vector<std::string>& lines);
     void emitStoreField(const LirStoreFieldInst& value, FunctionState& state, std::vector<std::string>& lines);

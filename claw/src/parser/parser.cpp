@@ -51,6 +51,15 @@ const Token& Parser::consumeToken(TokenKind kind, const std::string& message) {
     return token;
 }
 
+const Token& Parser::consumeNameToken(const std::string& message) {
+    if (!isNameToken(peek().kind)) {
+        failAtCurrent(message);
+    }
+    const Token& token = peek();
+    advance();
+    return token;
+}
+
 void Parser::consume(TokenKind kind, const std::string& message) {
     consumeToken(kind, message);
 }
@@ -59,7 +68,7 @@ bool Parser::isAtEnd() const {
     return peek().kind == TokenKind::Eof;
 }
 
-bool Parser::isTypeArgumentSeparator() const {
+bool Parser::isLegacyTypeArgumentSeparator() const {
     if (!check(TokenKind::Comma)) {
         return false;
     }
@@ -67,12 +76,29 @@ bool Parser::isTypeArgumentSeparator() const {
     return !(checkAhead(1, TokenKind::Identifier) && checkAhead(2, TokenKind::Colon));
 }
 
+bool Parser::isNameToken(TokenKind kind) const {
+    switch (kind) {
+    case TokenKind::Identifier:
+    case TokenKind::KwFail:
+    case TokenKind::KwLook:
+    case TokenKind::KwEdit:
+    case TokenKind::KwRef:
+    case TokenKind::KwMut:
+    case TokenKind::KwOf:
+    case TokenKind::KwAs:
+    case TokenKind::KwOver:
+    case TokenKind::KwSuper:
+    case TokenKind::KwTrue:
+    case TokenKind::KwFalse:
+    case TokenKind::KwSelf:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool Parser::matchNameOrKeyword() {
-    const auto kind = peek().kind;
-    if (kind == TokenKind::Identifier || kind == TokenKind::KwFail ||
-        kind == TokenKind::KwLook || kind == TokenKind::KwEdit ||
-        kind == TokenKind::KwOf || kind == TokenKind::KwAs ||
-        kind == TokenKind::KwOver || kind == TokenKind::KwSuper) {
+    if (isNameToken(peek().kind)) {
         advance();
         return true;
     }
@@ -85,11 +111,13 @@ bool Parser::isTopLevelRecoveryPoint(TokenKind kind) const {
 }
 
 bool Parser::isStatementRecoveryPoint(TokenKind kind) const {
-    return kind == TokenKind::KwHold || kind == TokenKind::KwSlot || kind == TokenKind::KwGive ||
-           kind == TokenKind::KwWhen || kind == TokenKind::KwLoop || kind == TokenKind::KwScan ||
-           kind == TokenKind::KwPick || kind == TokenKind::KwLift || kind == TokenKind::KwStop ||
-           kind == TokenKind::KwSkip || kind == TokenKind::KwRaw || kind == TokenKind::RBrace ||
-           isTopLevelRecoveryPoint(kind);
+    return kind == TokenKind::KwVal || kind == TokenKind::KwVar ||
+           kind == TokenKind::KwHold || kind == TokenKind::KwSlot ||
+           kind == TokenKind::KwReturn || kind == TokenKind::KwGive ||
+           kind == TokenKind::KwIf || kind == TokenKind::KwWhen ||
+           kind == TokenKind::KwLoop || kind == TokenKind::KwScan || kind == TokenKind::KwPick ||
+           kind == TokenKind::KwLift || kind == TokenKind::KwStop || kind == TokenKind::KwSkip ||
+           kind == TokenKind::KwRaw || kind == TokenKind::RBrace || isTopLevelRecoveryPoint(kind);
 }
 
 void Parser::recordDiagnostic(const DiagnosticError& error) {
@@ -128,16 +156,102 @@ SourceSpan Parser::spanFromToken(const Token& token) const {
         std::vector<Diagnostic>{Diagnostic{"parse", message, spanFromToken(token)}});
 }
 
+ImportItem Parser::parseImportItem() {
+    ImportItem item;
+    consumeNameToken("Expected import item name");
+    item.name = previous().text;
+    if (match(TokenKind::KwAs)) {
+        consumeNameToken("Expected import alias after 'as'");
+        item.alias = previous().text;
+    }
+    return item;
+}
+
+ImportDecl Parser::parseImportDeclaration() {
+    ImportDecl imp;
+    imp.span = spanFromToken(previous());
+
+    if (match(TokenKind::KwSuper)) {
+        imp.isSuper = true;
+        imp.modulePath = "super";
+        consume(TokenKind::Dot, "Expected '.' after 'super'");
+        consume(TokenKind::LBrace, "Expected '{' for import items");
+        if (!check(TokenKind::RBrace)) {
+            do {
+                imp.items.push_back(parseImportItem());
+            } while (match(TokenKind::Comma));
+        }
+        consume(TokenKind::RBrace, "Expected '}' after import items");
+        return imp;
+    }
+
+    consumeNameToken("Expected module name");
+    imp.modulePath = previous().text;
+    while (match(TokenKind::Dot)) {
+        if (check(TokenKind::LBrace)) {
+            consume(TokenKind::LBrace, "Expected '{' for import items");
+            if (!check(TokenKind::RBrace)) {
+                do {
+                    imp.items.push_back(parseImportItem());
+                } while (match(TokenKind::Comma));
+            }
+            consume(TokenKind::RBrace, "Expected '}' after import items");
+            return imp;
+        }
+
+        consumeNameToken("Expected module path segment");
+        imp.modulePath += "." + previous().text;
+    }
+
+    return imp;
+}
+
+void Parser::parseTypeParameterList(std::vector<std::string>* out) {
+    if (!out) {
+        return;
+    }
+
+    if (match(TokenKind::LBracket)) {
+        if (!check(TokenKind::RBracket)) {
+            do {
+                consumeNameToken("Expected type parameter");
+                out->push_back(previous().text);
+            } while (match(TokenKind::Comma));
+        }
+        consume(TokenKind::RBracket, "Expected ']' after type parameters");
+        return;
+    }
+
+    if (match(TokenKind::KwOf)) {
+        do {
+            consumeNameToken("Expected type parameter");
+            out->push_back(previous().text);
+        } while (match(TokenKind::Comma));
+    }
+}
+
+std::vector<std::unique_ptr<TypeNode>> Parser::parseBracketTypeArguments() {
+    std::vector<std::unique_ptr<TypeNode>> params;
+    consume(TokenKind::LBracket, "Expected '[' to start type arguments");
+    if (!check(TokenKind::RBracket)) {
+        do {
+            params.push_back(parseType());
+        } while (match(TokenKind::Comma));
+    }
+    consume(TokenKind::RBracket, "Expected ']' after type arguments");
+    return params;
+}
+
 std::unique_ptr<RealmDecl> Parser::parseFile() {
     auto realm = std::make_unique<RealmDecl>();
     realm->span = spanFromToken(peek());
 
     if (match(TokenKind::KwRealm)) {
         realm->span = spanFromToken(previous());
-        consumeToken(TokenKind::Identifier, "Expected realm name");
+        consumeNameToken("Expected realm name");
         realm->name = previous().text;
         while (match(TokenKind::Dot)) {
-            consumeToken(TokenKind::Identifier, "Expected realm name segment");
+            consumeNameToken("Expected realm name segment");
             realm->name += "." + previous().text;
         }
     }
@@ -145,43 +259,7 @@ std::unique_ptr<RealmDecl> Parser::parseFile() {
     while (!isAtEnd()) {
         try {
             if (match(TokenKind::KwImport)) {
-                ImportDecl imp;
-                imp.span = spanFromToken(previous());
-
-                if (match(TokenKind::KwSuper)) {
-                    imp.isSuper = true;
-                    imp.modulePath = "super";
-                    consume(TokenKind::Dot, "Expected '.' after 'super'");
-                    consume(TokenKind::LBrace, "Expected '{' for import items");
-                    if (!check(TokenKind::RBrace)) {
-                        do {
-                            consumeToken(TokenKind::Identifier, "Expected import item name");
-                            imp.specificItems.push_back(previous().text);
-                        } while (match(TokenKind::Comma));
-                    }
-                    consume(TokenKind::RBrace, "Expected '}' after import items");
-                } else {
-                    consumeToken(TokenKind::Identifier, "Expected module name");
-                    imp.modulePath = previous().text;
-                    while (match(TokenKind::Dot)) {
-                        if (check(TokenKind::LBrace)) {
-                            consume(TokenKind::LBrace, "Expected '{' for import items");
-                            if (!check(TokenKind::RBrace)) {
-                                do {
-                                    consumeToken(TokenKind::Identifier, "Expected import item");
-                                    imp.specificItems.push_back(previous().text);
-                                } while (match(TokenKind::Comma));
-                            }
-                            consume(TokenKind::RBrace, "Expected '}' after import items");
-                            break;
-                        }
-
-                        consumeToken(TokenKind::Identifier, "Expected module path segment");
-                        imp.modulePath += "." + previous().text;
-                    }
-                }
-
-                realm->imports.push_back(std::move(imp));
+                realm->imports.push_back(parseImportDeclaration());
                 continue;
             }
 
@@ -230,14 +308,14 @@ std::unique_ptr<FnDecl> Parser::parseFnDeclaration() {
     auto fn = std::make_unique<FnDecl>();
     fn->span = spanFromToken(previous());
 
-    consumeToken(TokenKind::Identifier, "Expected function name");
+    consumeNameToken("Expected function name");
     fn->name = previous().text;
 
     consume(TokenKind::LParen, "Expected '(' for parameters");
     if (!check(TokenKind::RParen)) {
         do {
             FnParam param;
-            consumeToken(TokenKind::Identifier, "Expected parameter name");
+            consumeNameToken("Expected parameter name");
             param.span = spanFromToken(previous());
             param.name = previous().text;
             consume(TokenKind::Colon, "Expected ':' after param name");
@@ -259,21 +337,15 @@ std::unique_ptr<ShapeDecl> Parser::parseShapeDeclaration() {
     auto shape = std::make_unique<ShapeDecl>();
     shape->span = spanFromToken(previous());
 
-    consumeToken(TokenKind::Identifier, "Expected shape name");
+    consumeNameToken("Expected shape name");
     shape->name = previous().text;
-
-    if (match(TokenKind::KwOf)) {
-        do {
-            consumeToken(TokenKind::Identifier, "Expected type parameter");
-            shape->typeParams.push_back(previous().text);
-        } while (match(TokenKind::Comma));
-    }
+    parseTypeParameterList(&shape->typeParams);
 
     consume(TokenKind::LBrace, "Expected '{' to start shape body");
     while (!check(TokenKind::RBrace) && !isAtEnd()) {
         ShapeField field;
         field.isShared = match(TokenKind::KwShare);
-        consumeToken(TokenKind::Identifier, "Expected field name");
+        consumeNameToken("Expected field name");
         field.span = spanFromToken(previous());
         field.name = previous().text;
         consume(TokenKind::Colon, "Expected ':' after field name");
@@ -288,15 +360,9 @@ std::unique_ptr<ChoiceDecl> Parser::parseChoiceDeclaration() {
     auto choice = std::make_unique<ChoiceDecl>();
     choice->span = spanFromToken(previous());
 
-    consumeToken(TokenKind::Identifier, "Expected choice name");
+    consumeNameToken("Expected choice name");
     choice->name = previous().text;
-
-    if (match(TokenKind::KwOf)) {
-        do {
-            consumeToken(TokenKind::Identifier, "Expected type parameter");
-            choice->typeParams.push_back(previous().text);
-        } while (match(TokenKind::Comma));
-    }
+    parseTypeParameterList(&choice->typeParams);
 
     consume(TokenKind::LBrace, "Expected '{' to start choice body");
     while (!check(TokenKind::RBrace) && !isAtEnd()) {
@@ -311,7 +377,7 @@ std::unique_ptr<ChoiceDecl> Parser::parseChoiceDeclaration() {
             if (!check(TokenKind::RParen)) {
                 do {
                     FnParam payload;
-                    consumeToken(TokenKind::Identifier, "Expected payload name");
+                    consumeNameToken("Expected payload name");
                     payload.span = spanFromToken(previous());
                     payload.name = previous().text;
                     consume(TokenKind::Colon, "Expected ':' after payload name");
@@ -333,18 +399,26 @@ std::unique_ptr<TypeNode> Parser::parseType() {
     const Token startToken = peek();
     type->span = spanFromToken(startToken);
 
-    if (match(TokenKind::KwLook)) {
+    if (match(TokenKind::KwRef)) {
+        if (match(TokenKind::KwMut)) {
+            type->viewKind = "edit";
+        } else {
+            type->viewKind = "look";
+        }
+    } else if (match(TokenKind::KwLook)) {
         type->viewKind = "look";
     } else if (match(TokenKind::KwEdit)) {
         type->viewKind = "edit";
     }
 
-    consumeToken(TokenKind::Identifier, "Expected type name");
+    consumeNameToken("Expected type name");
     type->name = previous().text;
 
-    if (match(TokenKind::KwOf)) {
+    if (check(TokenKind::LBracket)) {
+        type->params = parseBracketTypeArguments();
+    } else if (match(TokenKind::KwOf)) {
         type->params.push_back(parseType());
-        while (isTypeArgumentSeparator()) {
+        while (isLegacyTypeArgumentSeparator()) {
             advance();
             type->params.push_back(parseType());
         }
@@ -372,10 +446,12 @@ std::unique_ptr<BlockStmt> Parser::parseBlock() {
 }
 
 std::unique_ptr<Stmt> Parser::parseStatement() {
+    if (match(TokenKind::KwVal)) return parseBinding(false);
+    if (match(TokenKind::KwVar)) return parseBinding(true);
     if (match(TokenKind::KwHold)) return parseBinding(false);
     if (match(TokenKind::KwSlot)) return parseBinding(true);
-    if (match(TokenKind::KwGive)) return parseGive();
-    if (match(TokenKind::KwWhen)) return parseWhen();
+    if (match(TokenKind::KwReturn) || match(TokenKind::KwGive)) return parseGive();
+    if (match(TokenKind::KwIf) || match(TokenKind::KwWhen)) return parseWhen();
     if (match(TokenKind::KwLoop)) return parseLoop();
     if (match(TokenKind::KwScan)) return parseScan();
     if (match(TokenKind::KwPick)) return parsePick();
@@ -390,7 +466,6 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
         stmt->span = spanFromToken(previous());
         return stmt;
     }
-
     if (match(TokenKind::KwRaw)) {
         auto raw = std::make_unique<RawStmt>();
         raw->span = spanFromToken(previous());
@@ -422,21 +497,50 @@ std::unique_ptr<GiveStmt> Parser::parseGive() {
     return give;
 }
 
-std::unique_ptr<BindingStmt> Parser::parseBinding(bool isMutable) {
-    auto binding = std::make_unique<BindingStmt>();
-    binding->span = spanFromToken(previous());
-    binding->isMutable = isMutable;
+std::unique_ptr<Stmt> Parser::parseBinding(bool isMutable) {
+    const SourceSpan bindingSpan = spanFromToken(previous());
 
-    consumeToken(TokenKind::Identifier, "Expected variable name");
-    binding->name = previous().text;
+    consumeNameToken("Expected variable name");
+    const std::string bindingName = previous().text;
 
+    std::unique_ptr<TypeNode> bindingType;
     if (match(TokenKind::Colon)) {
-        binding->type = parseType();
+        bindingType = parseType();
     }
 
     if (match(TokenKind::Equal)) {
+        if (match(TokenKind::KwTry)) {
+            auto stmt = std::make_unique<TryStmt>();
+            stmt->span = bindingSpan;
+            stmt->isMutable = isMutable;
+            stmt->name = bindingName;
+            stmt->type = std::move(bindingType);
+            stmt->expr = parseExpression();
+
+            if (match(TokenKind::KwElse)) {
+                consumeNameToken("Expected failure binding name after 'else'");
+                stmt->failName = previous().text;
+                stmt->failBlock = parseBlock();
+            } else {
+                stmt->autoPropagate = true;
+            }
+            return stmt;
+        }
+
+        auto binding = std::make_unique<BindingStmt>();
+        binding->span = bindingSpan;
+        binding->isMutable = isMutable;
+        binding->name = bindingName;
+        binding->type = std::move(bindingType);
         binding->value = parseExpression();
+        return binding;
     }
+
+    auto binding = std::make_unique<BindingStmt>();
+    binding->span = bindingSpan;
+    binding->isMutable = isMutable;
+    binding->name = bindingName;
+    binding->type = std::move(bindingType);
     return binding;
 }
 
@@ -446,7 +550,7 @@ std::unique_ptr<WhenStmt> Parser::parseWhen() {
     stmt->condition = parseExpression();
     stmt->thenBlock = parseBlock();
 
-    if (match(TokenKind::KwOtherwise)) {
+    if (match(TokenKind::KwElse) || match(TokenKind::KwOtherwise)) {
         stmt->elseBlock = parseBlock();
     }
     return stmt;
@@ -466,7 +570,7 @@ std::unique_ptr<LoopStmt> Parser::parseLoop() {
 std::unique_ptr<ScanStmt> Parser::parseScan() {
     auto stmt = std::make_unique<ScanStmt>();
     stmt->span = spanFromToken(previous());
-    consumeToken(TokenKind::Identifier, "Expected iteration variable name");
+    consumeNameToken("Expected iteration variable name");
     stmt->itemName = previous().text;
     consume(TokenKind::KwOver, "Expected 'over' after scan variable");
     stmt->iterable = parseExpression();
@@ -491,7 +595,7 @@ std::unique_ptr<PickStmt> Parser::parsePick() {
         if (match(TokenKind::LParen)) {
             if (!check(TokenKind::RParen)) {
                 do {
-                    consumeToken(TokenKind::Identifier, "Expected binding name");
+                    consumeNameToken("Expected binding name");
                     branch.bindings.push_back(previous().text);
                 } while (match(TokenKind::Comma));
             }
@@ -511,11 +615,11 @@ std::unique_ptr<LiftStmt> Parser::parseLift() {
     stmt->expr = parseExpression();
 
     consume(TokenKind::KwAs, "Expected 'as' after lift expression");
-    consumeToken(TokenKind::Identifier, "Expected success binding name");
+    consumeNameToken("Expected success binding name");
     stmt->valueName = previous().text;
 
     consume(TokenKind::KwFail, "Expected 'fail' keyword");
-    consumeToken(TokenKind::Identifier, "Expected failure binding name");
+    consumeNameToken("Expected failure binding name");
     stmt->failName = previous().text;
 
     stmt->failBlock = parseBlock();
@@ -574,7 +678,7 @@ std::unique_ptr<Expr> Parser::parseCall() {
         }
 
         if (match(TokenKind::Dot)) {
-            consumeToken(TokenKind::Identifier, "Expected member name after '.'");
+            consumeNameToken("Expected member name after '.'");
             auto member = std::make_unique<MemberExpr>();
             member->span = expr->span;
             member->object = std::move(expr);
@@ -593,6 +697,18 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         failAtCurrent("Unexpected character in source.");
     }
 
+    if (match(TokenKind::KwTrue)) {
+        auto expr = std::make_unique<BoolExpr>();
+        expr->span = spanFromToken(previous());
+        expr->value = true;
+        return expr;
+    }
+    if (match(TokenKind::KwFalse)) {
+        auto expr = std::make_unique<BoolExpr>();
+        expr->span = spanFromToken(previous());
+        expr->value = false;
+        return expr;
+    }
     if (match(TokenKind::IntLiteral)) {
         auto expr = std::make_unique<IntExpr>();
         expr->span = spanFromToken(previous());
@@ -605,7 +721,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         expr->value = previous().text;
         return expr;
     }
-    if (match(TokenKind::Identifier)) {
+    if (match(TokenKind::Identifier) || match(TokenKind::KwSelf)) {
         auto expr = std::make_unique<IdentExpr>();
         expr->span = spanFromToken(previous());
         expr->name = previous().text;
@@ -627,3 +743,4 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
 }
 
 } // namespace claw::frontend
+

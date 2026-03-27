@@ -8,12 +8,36 @@
 
 namespace claw::frontend {
 
+std::string canonicalTypeName(std::string_view name) {
+    if (name == "Str") return "Text";
+    if (name == "Char") return "Rune";
+    if (name == "Int") return "Int64";
+    if (name == "UInt") return "UInt64";
+    if (name == "Float") return "Float64";
+    if (name == "Map") return "Table";
+    if (name == "Result") return "Outcome";
+    return std::string(name);
+}
+
 namespace {
 
 bool contains(const std::unordered_set<std::string>& set, const std::string& value) {
     return set.find(value) != set.end();
 }
 
+std::string surfaceTypeName(std::string_view name) {
+    if (name == "Text") return "Str";
+    if (name == "Rune") return "Char";
+    if (name == "Table") return "Map";
+    if (name == "Outcome") return "Result";
+    return std::string(name);
+}
+
+std::string surfaceViewPrefix(std::string_view viewKind) {
+    if (viewKind == "look") return "ref";
+    if (viewKind == "edit") return "ref mut";
+    return std::string(viewKind);
+}
 size_t pointerSizeBytes(const TargetSpec& target) {
     const unsigned widthBits = target.pointerWidthBits == 0 ? 64u : std::min(target.pointerWidthBits, 128u);
     return std::max<size_t>(1, widthBits / 8);
@@ -404,7 +428,7 @@ bool ResolvedType::isView() const {
 std::string ResolvedType::describe() const {
     std::ostringstream out;
     if (!viewKind.empty()) {
-        out << viewKind << ' ';
+        out << surfaceViewPrefix(viewKind) << ' ';
     }
     if (isOpaqueExternal()) {
         out << "opaque external result";
@@ -418,16 +442,17 @@ std::string ResolvedType::describe() const {
     } else if (name == "FloatLiteral") {
         out << "float literal";
     } else {
-        out << name;
+        out << surfaceTypeName(name);
     }
     if (!params.empty()) {
-        out << " of ";
+        out << "[";
         for (size_t i = 0; i < params.size(); ++i) {
             if (i > 0) {
                 out << ", ";
             }
             out << params[i].describe();
         }
+        out << "]";
     }
     return out.str();
 }
@@ -564,9 +589,9 @@ TypeCatalog::TypeCatalog()
           "Bits8", "Bits16", "Bits32", "Bits64", "Bits128",
           "Float32", "Float64", "USize", "ISize", "Unit"},
       builtinOwnedTypes{
-          "Text", "Bytes", "Span", "CStr", "OwnedCStr", "Vec", "Table",
+          "Text", "Bytes", "Span", "CStr", "OwnedCStr", "Vec", "Table", "Array", "Queue",
           "Set", "Heap", "Ring", "Arena", "Pool", "Anchor", "Addr",
-          "RawPtr", "RawMut", "Fn"} {
+          "RawPtr", "RawMut", "Fn", "Outcome"} {
     for (const auto& name : builtinPlainTypes) {
         registerKnownTypeArity(name, 0);
     }
@@ -575,12 +600,15 @@ TypeCatalog::TypeCatalog()
     }
 
     registerKnownTypeArity("Span", 1);
+    registerKnownTypeArity("Array", 1);
     registerKnownTypeArity("Vec", 1);
+    registerKnownTypeArity("Queue", 1);
     registerKnownTypeArity("Set", 1);
     registerKnownTypeArity("Heap", 1);
     registerKnownTypeArity("Ring", 1);
     registerKnownTypeArity("Pool", 1);
     registerKnownTypeArity("Table", 2);
+    registerKnownTypeArity("Outcome", 2);
 }
 
 void TypeCatalog::registerKnownTypeArity(const std::string& name, size_t arity) {
@@ -607,8 +635,9 @@ void TypeCatalog::registerChoiceName(const std::string& name, std::optional<size
 }
 
 bool TypeCatalog::hasNamedType(const std::string& name) const {
-    return contains(builtinPlainTypes, name) || contains(builtinOwnedTypes, name) ||
-           contains(shapeNames, name) || contains(choiceNames, name);
+    const std::string canonical = canonicalTypeName(name);
+    return contains(builtinPlainTypes, canonical) || contains(builtinOwnedTypes, canonical) ||
+           contains(shapeNames, canonical) || contains(choiceNames, canonical);
 }
 
 ResolvedType TypeCatalog::resolveType(
@@ -620,7 +649,7 @@ ResolvedType TypeCatalog::resolveType(
     }
 
     ResolvedType type;
-    type.name = node->name;
+    type.name = contains(localTypeParams, node->name) ? node->name : canonicalTypeName(node->name);
     type.viewKind = node->viewKind;
 
     std::optional<size_t> expectedArity;
@@ -629,14 +658,14 @@ ResolvedType TypeCatalog::resolveType(
         type.category = node->viewKind.empty() ? TypeCategory::Owned : TypeCategory::View;
         type.isGeneric = true;
         expectedArity = 0;
-    } else if (contains(builtinPlainTypes, node->name)) {
+    } else if (contains(builtinPlainTypes, type.name)) {
         type.category = node->viewKind.empty() ? TypeCategory::Plain : TypeCategory::View;
-        expectedArity = lookupKnownTypeArity(node->name);
-    } else if (contains(builtinOwnedTypes, node->name) || contains(shapeNames, node->name) || contains(choiceNames, node->name)) {
+        expectedArity = lookupKnownTypeArity(type.name);
+    } else if (contains(builtinOwnedTypes, type.name) || contains(shapeNames, type.name) || contains(choiceNames, type.name)) {
         type.category = node->viewKind.empty() ? TypeCategory::Owned : TypeCategory::View;
-        expectedArity = lookupKnownTypeArity(node->name);
+        expectedArity = lookupKnownTypeArity(type.name);
     } else {
-        type = makeUnknownType(node->name);
+        type = makeUnknownType(type.name);
         if (diagnostics) {
             diagnostics->push_back(Diagnostic{"semantic", "Unknown type: " + node->name, node->span});
         }
@@ -704,3 +733,6 @@ std::string describeLinkageKind(LinkageKind kind) {
 }
 
 } // namespace claw::frontend
+
+
+

@@ -108,6 +108,14 @@ struct OirLiftInst {
     std::string okName;
     std::string failName;
     std::string failLabel;
+    bool autoPropagate = false;
+};
+
+struct OirChoiceMakeInst {
+    std::string result;
+    std::string type;
+    std::string variantName;
+    std::vector<OirValue> payloads;
 };
 
 struct OirStopInst {
@@ -161,6 +169,7 @@ using OirInst = std::variant<
     OirScanInst,
     OirPickInst,
     OirLiftInst,
+    OirChoiceMakeInst,
     OirStopInst,
     OirSkipInst,
     OirCallInst,

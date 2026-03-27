@@ -1,201 +1,145 @@
 # Claw
 
-Claw is an experimental systems programming language and compiler project built around one core slogan:
+Claw is the compiler for `C@`, a systems language being built around one slogan:
 
 **Fast, Safe, Simple**
 
-- **Fast**: native code generation, predictable execution, no hidden GC, no implicit heap cost.
-- **Safe**: ownership, definite initialization, lexical views, typed external boundaries, and explicit `raw` regions are meant to keep safe code memory-safe by default.
-- **Simple**: the surface model stays smaller and easier to reason about than Rust. Users think in owned values, `look`, `edit`, `raw`, and explicit control over cost.
+- `Fast`: native code generation, explicit cost, no hidden GC path.
+- `Safe`: ownership, definite initialization, explicit `raw`, and typed external boundaries.
+- `Simple`: a smaller surface model than Rust, with syntax that stays direct and readable.
 
 ## Current Status
 
-Claw is currently at the **hardened frontend + first LLVM backend + initial native executable path** stage.
+The compiler is in an active **revised-surface migration**.
 
-Implemented today:
-- lexer and parser for the current Claw syntax direction
-- structured diagnostics with file, line, column, and caret highlights
-- nominal types for `shape` and `choice`
-- basic generics support in semantic analysis
-- semantic checking for bindings, assignments, calls, `pick`, `lift`, and control flow
-- ownership checking for moves on owned values
-- definite initialization checking for locals, reassignment, moves, and current control-flow joins
-- lexical borrow checking for local `look` / `edit` views
-- safe view-return validation, including builtin methods that return borrows from their receiver
-- raw-address fencing for safe code paths
-- explicit drop scheduling at reassignment, scope exit, and early control-flow exits in OIR-backed ownership lowering
-- contextual integer-literal typing across Byte / Int* / UInt* / Bits* / USize / ISize without implicit numeric widening
-- stable `native64` frontend rules for `USize` / `ISize`, independent of the compiler host width
-- bare, suffixed, and exponent float literals with contextual fitting into Float32 / Float64
-- static builtin method dispatch on core receivers such as `Text.len()`, `Text.slice(start, len)`, `Text.find_byte(b)`, `Bytes.byte_at(i)`, and mutable container methods like `reserve()`, `truncate()`, `shrink_to_fit()`, and `clear()`
-- builtin container generic arity enforcement for forms such as `Span of T`, `Vec of T`, `Table of K, V`, `Set of T`, `Heap of T`, and `Ring of T`
-- OIR as a structured in-memory model (`Program/Realm/Decl/Function/Block/Inst`) with textual printing layered on top
-- LIR as a backend-facing structured model derived from OIR, with CFG blocks, explicit stack objects, phi-like control joins, explicit builtin bounds checks with defect edges, explicit `lift` success/fail edges, explicit raw-region tagging, typed external call ABI/linkage metadata, explicit unsafe-boundary tagging, call kinds, and textual inspection via `lir`
-- canonical type layout, aggregate ABI pass classification, and symbol linkage metadata for named types and functions across OIR and LIR
-- typed dependency function contracts in `claw.toml`, including `raw` and `safe` external function signatures that flow into sema, OIR, and LIR
-- hardened foreign-ABI safety rules so non-`claw` safe external contracts only admit FFI-stable boundary types
-- workspace loading with root `main.cat`
-- folder module publishing through `modules.cat`
-- project config loading from `claw.toml`
-- AIR, OIR, LIR, and initial LLVM IR textual emission for inspected lowering stages
-- LLVM backend split across internal backend units instead of continuing as one monolithic emitter file
-- separate frontend and backend regression suites
-- initial `build` support that can compile the current supported subset into Windows `.exe` files through `clang` plus a bundled runtime shim
-- deferred mutable local type inference from first assignment, including view-safe propagation for borrowed locals
+The revised surface already alive in the compiler today includes:
+- `fn name(...) { ... }`
+- `return`
+- `val` and `var`
+- `ref` and `ref mut`
+- `if` / `else`
+- `Result[T, E]`, `Ok(...)`, `Fail(...)`
+- `try expr`
+- `try expr else err { ... }`
+- root `main.cat`
+- workspace config through `claw.toml`
 
-Validated environment:
-- MSYS2 UCRT64
-- CMake + g++ build
-- LLVM toolchain available through MSYS2 UCRT64
-- frontend regression runner in `test/run_frontend_tests.sh`
-- backend regression runner in `test_backend/run_backend_tests.sh`
-- native integration runner in `test_native/run_native_tests.sh`
+The compiler still keeps the deeper frontend and backend pipeline in place:
+- structured diagnostics
+- semantic analysis
+- ownership checking
+- AIR / OIR / LIR
+- LLVM IR emission
+- initial native executable generation
 
-## What Works Right Now
+## What Is Verified Right Now
 
-The frontend already rejects several important bug classes:
-- use-after-move
-- moving an owned value while it is borrowed
-- reading a value before it is definitely initialized
-- reading a moved-out `slot` before reinitialization
-- creating an `edit` borrow while a `look` borrow is still alive
-- returning a view that escapes a local owner
-- returning `edit` views from safe functions
-- raw-address usage outside explicit `raw` boundaries
-- using dependency-backed external calls without a shared signature as ordinary values; opaque external results are statement-only and require an explicit `raw` block
-- using typed dependency external calls outside their declared safety boundary; `raw` contracts require explicit `raw`, while `safe` contracts can participate in typed value flow
-- non-exhaustive or malformed `pick` branches
-- various typed import and workspace resolution failures with useful diagnostics
+Revised-only suites now live in:
+- `test/`
+- `test_backend/`
+- `test_native/`
 
-The initial LLVM backend is already alive for a strict subset:
-- direct function definitions and direct calls
-- integer arithmetic and integer / float comparisons
-- branch and goto lowering
-- stack locals through `alloca`, `store`, and `load`
-- runtime `print` / `println` lowering
-- string constant lowering to module globals
-- safe typed external scalar calls
-- checked lowering for core `Text` builtins such as `len`, `is_empty`, `byte_at`, `first_byte`, `last_byte`, and `slice`
-- explicit LLVM lowering for the current `bounds_check` path into branch-to-defect flow
-- concrete `pick` lowering for closed choices, including tag-based `switch`, payload extraction, and defect edges for unreachable choice states
-- initial `lift` lowering for concrete `Outcome of T, E`, including success/fail payload extraction and checked branch splitting in LLVM IR
-- ABI-accurate direct Claw aggregate lowering for current `indirect` shape paths, including hidden return slots, pointer-based aggregate parameters, and object stack slots
-- concrete shape field load/store lowering, including `store_field` for addressable objects such as `edit` views and aggregate locals
-- iterator lowering for the current slice-like iterables (`Span`, `Text`, `Bytes`) and direct loop-control lowering for `break` / `continue`
-- native regression coverage for loop control and Text-byte scanning on top of the current runtime subset
-- explicit backend rejection for raw-only / opaque external calls that have not yet been given a lowerable LLVM contract
-- textual LLVM IR emission through `claw llvm ...`
-- initial native executable generation through `claw build ...`, validated today for the current supported subset including runtime printing, unit-return `main`, and imported direct calls
+Verified commands:
 
-Backend bring-up is validated today by assembling emitted IR with `llvm-as` and lowering it with `llc` for the current backend fixtures.
+```bash
+claw check path/to/file.cat
+claw validate path/to/workspace
+claw air path/to/file.cat
+claw llvm path/to/file.cat
+claw build path/to/file-or-workspace
+```
 
-## What Is Not Finished Yet
+Validated today:
+- revised frontend parsing and semantic checks
+- revised workspace loading with `main.cat`, `src/modules.cat`, and `claw.toml`
+- revised `Result[T, E]` and `try` lowering through LLVM
+- native `.exe` generation for the current revised subset
 
-Claw is not yet a finished production compiler.
+## Current Native Scope
 
-Important missing pieces:
-- broader LLVM lowering coverage for richer aggregate operations beyond the current `pick` / initial `lift` subset, more builtin dispatch cases, and deeper checked container paths beyond the current `Text` subset
-- fuller typed raw / FFI contracts for memory operations, effects, and non-function boundaries
-- richer ownership precision across more complex aliasing cases
-- concurrency-related safety checks such as `sendable` / `shareable`
-- optimization passes, broader native/link coverage, and richer runtime integration beyond the current Windows GNU subset
+`claw build ...` is already real, but the supported subset is still intentionally narrow.
 
-So while the frontend is hard and the first LLVM path is now alive, the language should still not yet be described as fully Rust-level safe or production-complete.
+Currently green:
+- single-file revised programs
+- simple revised workspaces with root `main.cat`
+- runtime `println(...)`
+- direct arithmetic and direct calls in the current subset
 
-## Language Direction
+Not claimed yet:
+- full revised imported workspace native coverage
+- richer aggregate construction paths
+- the full revised collection and builtin surface
+- broader raw / FFI lowering beyond the current typed subset
 
-Claw is being designed as a structured systems language for production use.
+## Workspace Shape
 
-Current design direction includes:
-- `main.cat` as the root workspace entry file
-- `fn main()` or `fn main() -> Int32` as the validated entry point
-- `modules.cat` for publishing non-root folder modules to outer scopes
-- `claw.toml` with project metadata and dependencies
-- explicit ownership and borrowing through value categories instead of hidden behavior
-- a stable frontend `native64` data model for `USize` / `ISize` until explicit target selection is added later
+Current workspace layout:
 
-Example project config shape:
+```text
+my-app/
+  claw.toml
+  main.cat
+  src/
+    modules.cat
+    math.cat
+```
+
+Example `claw.toml`:
 
 ```toml
 [project]
-name = "TICTACTOE"
+name = "my_app"
 version = "0.1.0"
 edition = "2025"
 
 [dependencies]
-term = { version = "1.0.0", abi = "claw", emit = "raw fn emit(message: look Text) -> Unit {}" }
 ```
 
-## Immediate Next Plan
-
-The correct order from here is:
-
-1. Expand LLVM lowering coverage on top of the current LIR contract.
-2. Deepen LLVM lowering for richer aggregate cases and deeper `lift` / `pick` paths now that the first aggregate ABI layer plus loop/iterator control are alive.
-3. Tighten typed raw / FFI contracts for memory operations, effects, and pointer-oriented boundaries in parallel with backend work.
-4. Expand builtin method coverage only where dispatch stays compile-time, borrow soundness remains intact, and cost remains explicit.
-5. Harden and widen the native executable path across richer runtime, aggregate, and FFI cases before later optimization work.
-
-## Additional Planned Type Work
-
-One upcoming language task is to expand data type support so the language does not feel centered only around `Int32`.
-
-Planned direction:
-- keep widening numeric coverage consistent with the current integer, float, exponent, and size-type literal rules
-- strengthen support for the wider integer families already present in the design
-- add more range-aware diagnostics where numeric targets still have weak spots
-- keep the model explicit and simple rather than adding implicit widening rules that hide cost or risk
-
-The goal is to make Claw feel like a serious production systems language, not a toy frontend with one convenient numeric default.
+`main.cat` is special:
+- it is the fixed workspace entry
+- it must contain `fn main()`
+- it is not importable as a normal module surface
 
 ## Build And Test
 
-Build with MSYS2 UCRT64:
+Use MSYS2 UCRT64.
+
+Build:
 
 ```bash
 cmake -S . -B build-ucrt64 -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=C:/msys64/ucrt64/bin/g++.exe
 cmake --build build-ucrt64 -j 4
 ```
 
-Run the frontend regression suite:
+Run suites:
 
 ```bash
 bash test/run_frontend_tests.sh
-```
-
-Run the backend LLVM bring-up suite:
-
-```bash
 bash test_backend/run_backend_tests.sh
-```
-
-Inspect lowering stages manually:
-
-```bash
-claw validate path/to/workspace
-claw air path/to/file.cat
-claw oir path/to/file.cat
-claw lir path/to/file.cat
-claw llvm path/to/file.cat
-claw build path/to/workspace
+bash test_native/run_native_tests.sh
 ```
 
 ## Repository Layout
 
 - `src/`
-  Compiler source code.
+  Compiler source.
 - `src/backend/`
-  Initial LLVM backend emission.
+  LLVM backend implementation.
 - `test/`
-  Frontend regression corpus and workspace fixtures.
+  Revised frontend regression suite.
 - `test_backend/`
-  Separate LLVM/backend bring-up fixtures.
+  Revised LLVM/backend regression suite.
+- `test_native/`
+  Revised native executable integration suite.
 - `docs/`
-  Internal design status and roadmap notes.
+  Internal status notes and next-wave planning.
 
-## Summary
+## Next Wave
 
-Claw now has a hard frontend foundation: parser, diagnostics, semantic analysis, ownership checks, definite initialization checks, workspace structure, typed external boundaries, canonical layout metadata, and backend-facing OIR/LIR.
+The next wave is still about finishing the revised language surface cleanly before widening backend claims again.
 
-The project has also crossed the first backend threshold: LLVM emission exists, backend fixtures are separated from frontend fixtures, the current subset already assembles through LLVM tools, and the current supported subset can now build and run native Windows executables. The next job is to deepen that backend and native coverage without weakening the `Fast, Safe, Simple` contract.
-
+Immediate order:
+1. finish the revised type and collection surface migration
+2. keep replacing remaining old surface terminology in sema, IR text, and docs
+3. prepare receiver-first builtin method dispatch for the revised collection model
+4. then continue widening LLVM and native coverage on top of that cleaner surface

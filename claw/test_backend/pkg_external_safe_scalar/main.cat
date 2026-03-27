@@ -1,7 +1,0 @@
-realm main
-
-import native.{add}
-
-fn main() -> Int32 {
-    give add(33_Int32)
-}

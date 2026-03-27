@@ -11,21 +11,24 @@ AirEmitter::AirEmitter(const SemanticAnalyzer& sema) : sema(sema) {}
 
 std::string AirEmitter::emit(const RealmDecl* realm) const {
     if (!realm) {
-        return "air.realm <unknown>\n";
+        return "air.module <unknown>\n";
     }
 
     std::ostringstream out;
-    out << "air.realm " << realm->name << "\n";
+    out << "air.module " << realm->name << "\n";
 
     for (const auto& imp : realm->imports) {
         out << "import " << imp.modulePath;
-        if (!imp.specificItems.empty()) {
+        if (!imp.items.empty()) {
             out << ".{";
-            for (size_t i = 0; i < imp.specificItems.size(); ++i) {
+            for (size_t i = 0; i < imp.items.size(); ++i) {
                 if (i > 0) {
                     out << ", ";
                 }
-                out << imp.specificItems[i];
+                out << imp.items[i].name;
+                if (!imp.items[i].alias.empty()) {
+                    out << " as " << imp.items[i].alias;
+                }
             }
             out << "}";
         }
@@ -135,7 +138,7 @@ std::string AirEmitter::emitStmt(const Stmt* stmt, int indent) const {
 
     if (auto* bind = dynamic_cast<const BindingStmt*>(stmt)) {
         const auto bindingIt = sema.result().bindingTypes.find(bind);
-        out << pad << (bind->isMutable ? "slot " : "hold ") << bind->name << ": "
+        out << pad << (bind->isMutable ? "var " : "val ") << bind->name << ": "
             << (bindingIt != sema.result().bindingTypes.end() ? bindingIt->second.describe() : "<unknown>");
         if (bind->value) {
             out << " = " << emitExpr(bind->value.get());
@@ -150,7 +153,7 @@ std::string AirEmitter::emitStmt(const Stmt* stmt, int indent) const {
     }
 
     if (auto* give = dynamic_cast<const GiveStmt*>(stmt)) {
-        out << pad << "give";
+        out << pad << "return";
         if (give->value) {
             out << " " << emitExpr(give->value.get());
         }
@@ -164,10 +167,10 @@ std::string AirEmitter::emitStmt(const Stmt* stmt, int indent) const {
     }
 
     if (auto* when = dynamic_cast<const WhenStmt*>(stmt)) {
-        out << pad << "when " << emitExpr(when->condition.get()) << "\n";
+        out << pad << "if " << emitExpr(when->condition.get()) << "\n";
         out << emitBlock(when->thenBlock.get(), indent + 1);
         if (when->elseBlock) {
-            out << pad << "otherwise\n";
+            out << pad << "else\n";
             out << emitBlock(when->elseBlock.get(), indent + 1);
         }
         return out.str();
@@ -215,6 +218,24 @@ std::string AirEmitter::emitStmt(const Stmt* stmt, int indent) const {
     if (auto* lift = dynamic_cast<const LiftStmt*>(stmt)) {
         out << pad << "lift " << emitExpr(lift->expr.get()) << " as " << lift->valueName << " fail " << lift->failName << "\n";
         out << emitBlock(lift->failBlock.get(), indent + 1);
+        return out.str();
+    }
+
+    if (auto* tryStmt = dynamic_cast<const TryStmt*>(stmt)) {
+        out << pad << (tryStmt->isMutable ? "var " : "val ") << tryStmt->name;
+        if (tryStmt->type) {
+            out << ": " << tryStmt->type->name;
+            if (!tryStmt->type->params.empty()) {
+                out << "[...]";
+            }
+        }
+        out << " = try " << emitExpr(tryStmt->expr.get());
+        if (tryStmt->autoPropagate) {
+            out << "\n";
+        } else {
+            out << " else " << tryStmt->failName << "\n";
+            out << emitBlock(tryStmt->failBlock.get(), indent + 1);
+        }
         return out.str();
     }
 
@@ -288,3 +309,6 @@ std::string AirEmitter::indentText(int indent) const {
 }
 
 } // namespace claw::frontend
+
+
+

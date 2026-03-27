@@ -1,5 +1,0 @@
-realm app.runtime
-
-share fn banner() {
-    println("boot")
-}

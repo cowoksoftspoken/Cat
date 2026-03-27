@@ -1,5 +1,0 @@
-realm test.import_helpers
-
-share fn say_hello() {
-    println("helper ready")
-}

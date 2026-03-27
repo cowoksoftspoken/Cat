@@ -1,0 +1,30 @@
+shape Box[T] {
+    value: T
+}
+
+choice Maybe[T] {
+    Some(value: T)
+    None
+}
+
+fn echo(text: ref Str) -> ref Str {
+    if true {
+        return text
+    } else {
+        return text
+    }
+}
+
+fn sum(left: Int32, right: Int32) -> Int32 {
+    return left + right
+}
+
+fn main() {
+    val greeting: Str = "hello"
+    var total: Int = 42
+    total = total + 1
+    scan item over greeting {
+        stop
+    }
+    println(sum(1, 2))
+}

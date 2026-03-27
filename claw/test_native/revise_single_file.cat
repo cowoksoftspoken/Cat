@@ -1,0 +1,7 @@
+fn sum(left: Int32, right: Int32) -> Int32 {
+    return left + right
+}
+
+fn main() {
+    println(sum(1, 2))
+}

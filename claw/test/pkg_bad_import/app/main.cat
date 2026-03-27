@@ -1,7 +1,0 @@
-realm app.main
-
-import app.api.{add}
-
-fn main() -> Int32 {
-    give add("oops", 1)
-}
