@@ -8,7 +8,7 @@ void LlvmEmitter::emitIterNext(
     FunctionState& state,
     std::vector<std::string>& lines) {
     const std::string iterableBase = canonicalBackendTypeBase(stripGenericArgs(stripViewPrefix(value.iterable.type)));
-    if (iterableBase != "Span" && iterableBase != "Text" && iterableBase != "Bytes") {
+    if (iterableBase != "Span" && iterableBase != "Str") {
         throw std::runtime_error(
             "LLVM lowering does not yet support iter_next over iterable type '" + value.iterable.type + "'.");
     }
@@ -212,7 +212,7 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
         }
     };
 
-    if ((baseType == "Text" || baseType == "Bytes") && methodName == "len") {
+    if (baseType == "Str" && methodName == "len") {
         if (!value.result.has_value()) {
             return;
         }
@@ -223,7 +223,7 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
         return;
     }
 
-    if ((baseType == "Text" || baseType == "Bytes") && methodName == "is_empty") {
+    if (baseType == "Str" && methodName == "is_empty") {
         if (!value.result.has_value()) {
             return;
         }
@@ -234,7 +234,7 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
         return;
     }
 
-    if (baseType == "Text" && methodName == "byte_at") {
+    if (baseType == "Str" && methodName == "byte_at") {
         if (value.args.size() != 1) {
             throw std::runtime_error("LLVM lowering expected one argument for text.byte_at.");
         }
@@ -250,7 +250,7 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
         return;
     }
 
-    if (baseType == "Text" && methodName == "first_byte") {
+    if (baseType == "Str" && methodName == "first_byte") {
         if (!value.result.has_value()) {
             return;
         }
@@ -260,7 +260,7 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
         return;
     }
 
-    if (baseType == "Text" && methodName == "last_byte") {
+    if (baseType == "Str" && methodName == "last_byte") {
         if (!value.result.has_value()) {
             return;
         }
@@ -275,7 +275,7 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
         return;
     }
 
-    if (baseType == "Text" && methodName == "slice") {
+    if (baseType == "Str" && methodName == "slice") {
         if (value.args.size() != 2) {
             throw std::runtime_error("LLVM lowering expected two arguments for text.slice.");
         }

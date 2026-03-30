@@ -63,6 +63,16 @@ struct MemberExpr : public Expr {
     std::string member;
 };
 
+struct IndexExpr : public Expr {
+    std::unique_ptr<Expr> object;
+    std::unique_ptr<Expr> index;
+};
+
+struct BorrowExpr : public Expr {
+    bool isMutable = false;
+    std::unique_ptr<Expr> target;
+};
+
 struct Stmt : public AstNode {};
 
 struct BlockStmt : public Stmt {
@@ -198,4 +208,5 @@ struct RealmDecl : public AstNode {
 };
 
 } // namespace claw::frontend
+
 

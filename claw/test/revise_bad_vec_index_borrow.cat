@@ -1,0 +1,3 @@
+fn bad(nums: Vec[Int32]) -> ref Int32 {
+    return ref nums[0]
+}

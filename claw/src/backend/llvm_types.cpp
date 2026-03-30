@@ -57,18 +57,18 @@ std::string LlvmEmitter::llvmType(const std::string& typeText) const {
     if (stripped == "Bool" || base == "Bool") return "i1";
     if (stripped == "integer literal" || base == "integer literal") return "i32";
     if (stripped == "float literal" || base == "float literal") return "double";
-    if (base == "Byte" || base == "Int8" || base == "UInt8" || base == "Bits8") return "i8";
-    if (base == "Int16" || base == "UInt16" || base == "Bits16") return "i16";
-    if (base == "Rune" || base == "Int32" || base == "UInt32" || base == "Bits32") return "i32";
-    if (base == "Int64" || base == "UInt64" || base == "Bits64" || base == "USize" || base == "ISize") return "i64";
-    if (base == "Int128" || base == "UInt128" || base == "Bits128") return "i128";
+    if (base == "Int8" || base == "UInt8") return "i8";
+    if (base == "Int16" || base == "UInt16") return "i16";
+    if (base == "Char" || base == "Int32" || base == "UInt32") return "i32";
+    if (base == "Int64" || base == "UInt64" || base == "USize") return "i64";
+    if (base == "Int128" || base == "UInt128") return "i128";
     if (base == "Float32") return "float";
     if (base == "Float64") return "double";
-    if (base == "Text" || base == "Span") return "%claw.slice";
-    if (base == "Bytes") return "%claw.buffer";
+    if (base == "Str" || base == "Span") return "%claw.slice";
+    if (base == "Vec") return "%claw.buffer";
     if (base == "Addr" || base == "RawPtr" || base == "RawMut" || base == "Fn" || base == "CStr" ||
-        base == "OwnedCStr" || base == "Arena" || base == "Pool" || base == "Anchor" || base == "Table" ||
-        base == "Set" || base == "Heap" || base == "Ring") {
+        base == "OwnedCStr" || base == "Arena" || base == "Anchor" || base == "Map" ||
+        base == "Set" || base == "Queue") {
         return "ptr";
     }
 
@@ -149,6 +149,11 @@ const StringConstantInfo& LlvmEmitter::internString(std::string_view literal) {
 std::string LlvmEmitter::emitStringGlobals() {
     std::ostringstream out;
     bool first = true;
+    const auto collectLiteral = [&](const LirValue& value) {
+        if (isStringLiteral(value.text)) {
+            internString(value.text);
+        }
+    };
     for (const auto& realm : program.realms) {
         for (const auto& decl : realm.decls) {
             if (const auto* fn = std::get_if<LirFunction>(&decl)) {
@@ -156,25 +161,37 @@ std::string LlvmEmitter::emitStringGlobals() {
                     for (const auto& inst : block.insts) {
                         std::visit(Overloaded{
                             [&](const LirStoreInst& value) {
-                                if (isStringLiteral(value.value.text)) {
-                                    internString(value.value.text);
-                                }
+                                collectLiteral(value.value);
+                            },
+                            [&](const LirStoreFieldInst& value) {
+                                collectLiteral(value.object);
+                                collectLiteral(value.value);
                             },
                             [&](const LirReturnInst& value) {
-                                if (isStringLiteral(value.value.text)) {
-                                    internString(value.value.text);
-                                }
+                                collectLiteral(value.value);
                             },
                             [&](const LirDiscardInst& value) {
-                                if (isStringLiteral(value.value.text)) {
-                                    internString(value.value.text);
+                                collectLiteral(value.value);
+                            },
+                            [&](const LirBoundsCheckInst& value) {
+                                for (const auto& arg : value.args) {
+                                    collectLiteral(arg);
                                 }
                             },
                             [&](const LirCallInst& value) {
                                 for (const auto& arg : value.args) {
-                                    if (isStringLiteral(arg.text)) {
-                                        internString(arg.text);
-                                    }
+                                    collectLiteral(arg);
+                                }
+                            },
+                            [&](const LirIterNextInst& value) {
+                                collectLiteral(value.iterable);
+                            },
+                            [&](const LirLiftInst& value) {
+                                collectLiteral(value.value);
+                            },
+                            [&](const LirChoiceMakeInst& value) {
+                                for (const auto& payload : value.payloads) {
+                                    collectLiteral(payload);
                                 }
                             },
                             [&](const auto&) {}
@@ -298,18 +315,18 @@ std::optional<AbiLayout> LlvmEmitter::abiLayoutForType(std::string_view typeText
     const std::string& base = parsed.base;
 
     if (base == "Unit") return AbiLayout{0, 1};
-    if (base == "Bool" || base == "Byte" || base == "Int8" || base == "UInt8" || base == "Bits8") return AbiLayout{1, 1};
-    if (base == "Int16" || base == "UInt16" || base == "Bits16") return AbiLayout{2, 2};
-    if (base == "Rune" || base == "Int32" || base == "UInt32" || base == "Bits32" || base == "Float32") return AbiLayout{4, 4};
-    if (base == "Int64" || base == "UInt64" || base == "Bits64" || base == "USize" || base == "ISize" || base == "Float64") {
+    if (base == "Bool" || base == "Int8" || base == "UInt8") return AbiLayout{1, 1};
+    if (base == "Int16" || base == "UInt16") return AbiLayout{2, 2};
+    if (base == "Char" || base == "Int32" || base == "UInt32" || base == "Float32") return AbiLayout{4, 4};
+    if (base == "Int64" || base == "UInt64" || base == "USize" || base == "Float64") {
         return AbiLayout{8, 8};
     }
-    if (base == "Int128" || base == "UInt128" || base == "Bits128") return AbiLayout{16, 16};
-    if (base == "Text" || base == "Span") return AbiLayout{16, 8};
-    if (base == "Bytes") return AbiLayout{24, 8};
+    if (base == "Int128" || base == "UInt128") return AbiLayout{16, 16};
+    if (base == "Str" || base == "Span") return AbiLayout{16, 8};
+    if (base == "Vec") return AbiLayout{24, 8};
     if (base == "Addr" || base == "RawPtr" || base == "RawMut" || base == "Fn" || base == "CStr" ||
-        base == "OwnedCStr" || base == "Arena" || base == "Pool" || base == "Anchor" || base == "Table" ||
-        base == "Set" || base == "Heap" || base == "Ring") {
+        base == "OwnedCStr" || base == "Arena" || base == "Anchor" || base == "Map" ||
+        base == "Set" || base == "Queue") {
         return AbiLayout{8, 8};
     }
 
@@ -461,6 +478,8 @@ const LirFunction* LlvmEmitter::lookupDirectFunction(std::string_view callee) co
 }
 
 } // namespace claw::frontend
+
+
 
 
 

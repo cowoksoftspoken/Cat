@@ -192,7 +192,7 @@ struct AnalysisResult {
     std::unordered_map<const BindingStmt*, ResolvedType> bindingTypes;
     std::unordered_map<const TryStmt*, ResolvedType> tryBindingTypes;
     std::unordered_map<const ScanStmt*, ResolvedType> scanItemTypes;
-    std::unordered_map<const CallExpr*, ChoiceConstructorInfo> choiceConstructors;
+    std::unordered_map<const Expr*, ChoiceConstructorInfo> choiceConstructors;
     std::unordered_map<const FnDecl*, FunctionSignature> functionSignatures;
     std::unordered_map<std::string, FunctionSignature> functionsByName;
     std::unordered_map<std::string, ShapeInfo> shapesByName;

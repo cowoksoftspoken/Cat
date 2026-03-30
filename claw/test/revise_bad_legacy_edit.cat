@@ -1,0 +1,5 @@
+fn echo(text: edit Str) -> ref Str {
+    return text
+}
+
+fn main() {}

@@ -1,0 +1,35 @@
+choice Maybe[T] {
+    None
+    Some(value: T)
+}
+
+fn greet(name: Maybe[Str]) -> Str {
+    pick name {
+        Some(n) {
+            return n
+        }
+        None {
+            return "world"
+        }
+    }
+}
+
+fn add_one(value: Maybe[Int32]) -> Int32 {
+    pick value {
+        Some(n) {
+            return n + 1
+        }
+        None {
+            return 0
+        }
+    }
+}
+
+fn main() {
+    val a: Maybe[Int32] = Some(41)
+    val b: Maybe[Int32] = None
+    println(add_one(a))
+    println(add_one(b))
+    println(greet(Some("C@")))
+    println(greet(None))
+}

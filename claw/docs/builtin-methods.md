@@ -9,117 +9,84 @@ val numbers = Vec[Int32][1, 2, 3]
 val size = numbers.len()
 ```
 
-This file tracks the builtin subset that is already implemented in the compiler core, while the revised type surface is still being normalized.
-
-## Revised Direction
+## Design Principles
 
 - dispatch hangs off the receiver value, not helper namespaces
 - method availability is resolved by semantic analysis from the receiver type
 - dispatch stays static whenever possible to preserve `Fast`
 - borrow-sensitive methods must keep ownership and view tracking explicit
 
-## Current Implemented Receiver Groups
+## Receiver Groups
 
 ### Str
 
-Current implemented subset:
-- `len()`
-- `is_empty()`
-- `byte_at(index)`
-- `first_byte()`
-- `last_byte()`
-- `find_byte(byte)`
-- `count_byte(byte)`
-- `starts_with(prefix)`
-- `ends_with(suffix)`
-- `contains(part)`
-- `contains_byte(byte)`
-- `slice(start, len)`
+- `len() -> USize`
+- `is_empty() -> Bool`
+- `byte_at(index: USize) -> UInt8`
+- `first_byte() -> UInt8`
+- `last_byte() -> UInt8`
+- `find_byte(byte: UInt8) -> Int64`
+- `count_byte(byte: UInt8) -> USize`
+- `starts_with(prefix: ref Str) -> Bool`
+- `ends_with(suffix: ref Str) -> Bool`
+- `contains(part: ref Str) -> Bool`
+- `contains_byte(byte: UInt8) -> Bool`
+- `slice(start: USize, len: USize) -> ref Str`
 
 Notes:
-- the compiler core already treats string-like receivers as byte-backed
-- the final revised iteration story for `Str` is still pending
-- default iteration over `Str` values has not been switched to the final `Char`-first model yet
+- `Str` is byte-backed; byte methods operate on raw UTF-8 bytes
+- `scan` over `Str` yields `UInt8` (byte-level iteration)
+- `Char`-first iteration is planned but not yet implemented
 
-### Bytes
+### Span[T]
 
-Current implemented subset:
-- `len()`
-- `is_empty()`
-- `byte_at(index)`
-- `first_byte()`
-- `last_byte()`
-- `find_byte(byte)`
-- `count_byte(byte)`
-- `starts_with(prefix)`
-- `ends_with(suffix)`
-- `contains(part)`
-- `contains_byte(byte)`
-- `slice(start, len)`
-- `capacity()`
-- `has_capacity(min)`
-- `reserve(min)`
-- `truncate(len)`
-- `shrink_to_fit()`
-- `clear()`
+- `len() -> USize`
+- `is_empty() -> Bool`
 
 ### Vec[T]
 
-Current implemented subset:
-- `len()`
-- `is_empty()`
-- `capacity()`
-- `has_capacity(min)`
-- `reserve(min)`
-- `truncate(len)`
+- `len() -> USize`
+- `is_empty() -> Bool`
+- `capacity() -> USize`
+- `has_capacity(min: USize) -> Bool`
+- `reserve(min: USize)`
+- `truncate(len: USize)`
 - `shrink_to_fit()`
 - `clear()`
 
 ### Map[K, V]
 
-Current implemented subset:
-- `len()`
-- `is_empty()`
-- `capacity()`
-- `has_capacity(min)`
-- `reserve(min)`
+- `len() -> USize`
+- `is_empty() -> Bool`
+- `capacity() -> USize`
+- `has_capacity(min: USize) -> Bool`
+- `reserve(min: USize)`
 - `shrink_to_fit()`
 - `clear()`
 
 ### Set[T]
 
-Current implemented subset:
-- `len()`
-- `is_empty()`
-- `capacity()`
-- `has_capacity(min)`
-- `reserve(min)`
+- `len() -> USize`
+- `is_empty() -> Bool`
+- `capacity() -> USize`
+- `has_capacity(min: USize) -> Bool`
+- `reserve(min: USize)`
 - `shrink_to_fit()`
 - `clear()`
 
-### Ring[T]
+### Queue[T]
 
-Current implemented subset:
-- `len()`
-- `is_empty()`
-- `capacity()`
-- `has_capacity(min)`
-- `reserve(min)`
-- `truncate(len)`
+- `len() -> USize`
+- `is_empty() -> Bool`
+- `capacity() -> USize`
+- `has_capacity(min: USize) -> Bool`
+- `reserve(min: USize)`
+- `truncate(len: USize)`
 - `shrink_to_fit()`
 - `clear()`
 
-## Migration Notes
+## Migration Status
 
-This file is intentionally conservative.
-
-What is already true:
-- dispatch is static
-- receiver typing is checked in sema
-- mutable-only methods stay gated by mutable receiver rules
-- view-returning helpers keep ownership tracking involved
-
-What is not finished yet:
-- final revised naming for every receiver family
-- the final `Str` / `Char` iteration model
-- the broader receiver-first collection API planned in the revised PRD
+- All receiver groups now use finalized PRD names
+- Legacy types (`Bytes`, `Ring[T]`, `Table[K,V]`) have been removed
+- Return types use `UInt8` and `Int64` instead of legacy `Byte` / `ISize`

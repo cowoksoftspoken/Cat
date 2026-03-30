@@ -13,6 +13,10 @@ bool isDefinitelyInitialized(StorageState state) {
     return state == StorageState::Initialized;
 }
 
+
+bool isBorrowCarrierType(const ResolvedType& type) {
+    return type.isView() || type.name == "Span";
+}
 StorageState mergeStorageState(StorageState left, StorageState right) {
     return left == right ? left : StorageState::MaybeUninitialized;
 }
@@ -127,7 +131,7 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
         state.type = bindingType;
         state.isMutableStorage = bind->isMutable;
         state.storageState = bind->value ? StorageState::Initialized : StorageState::Uninitialized;
-        if (bindingType.isView() && bind->value) {
+        if (isBorrowCarrierType(bindingType) && bind->value) {
             if (const auto token = resolveBorrowToken(bind->value.get(), bindingType)) {
                 if (acquireBorrowToken(*token, bind->value.get())) {
                     state.lexicalBorrow = token;
@@ -147,7 +151,7 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
                 if (it->second.type.isUnknown() && !assignedValueType.isUnknown() && !assignedValueType.isOpaqueExternal()) {
                     it->second.type = assignedValueType;
                 }
-                const bool consumeValue = !it->second.type.isView() && assignedValueType.isOwned();
+                const bool consumeValue = !isBorrowCarrierType(it->second.type) && assignedValueType.isOwned();
                 checkExpr(assign->value.get(), consumeValue);
             } else if (assign->value) {
                 checkExpr(assign->value.get(), assignedValueType.isOwned());
@@ -155,7 +159,7 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
 
             if (it != varStates.end()) {
                 auto& state = it->second;
-                if (state.type.isView()) {
+                if (isBorrowCarrierType(state.type)) {
                     releaseLexicalBorrow(state);
                     state.lexicalBorrow.reset();
                     if (assign->value) {
@@ -356,7 +360,7 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
         const ResolvedType outcomeType = typeOfExpr(lift->expr.get());
         ResolvedType okType = makeUnknownType();
         ResolvedType failType = makeUnknownType();
-        if (outcomeType.name == "Outcome" && outcomeType.params.size() == 2) {
+        if (outcomeType.name == "Result" && outcomeType.params.size() == 2) {
             okType = outcomeType.params[0];
             failType = outcomeType.params[1];
         }
@@ -384,7 +388,7 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
         const ResolvedType outcomeType = typeOfExpr(tryStmt->expr.get());
         ResolvedType okType = makeUnknownType();
         ResolvedType failType = makeUnknownType();
-        if (outcomeType.name == "Outcome" && outcomeType.params.size() == 2) {
+        if (outcomeType.name == "Result" && outcomeType.params.size() == 2) {
             okType = outcomeType.params[0];
             failType = outcomeType.params[1];
         }
@@ -466,6 +470,17 @@ void OwnershipChecker::checkExpr(Expr* expr, bool isConsume) {
     if (auto* binary = dynamic_cast<BinaryExpr*>(expr)) {
         checkExpr(binary->left.get(), false);
         checkExpr(binary->right.get(), false);
+        return;
+    }
+
+    if (auto* index = dynamic_cast<IndexExpr*>(expr)) {
+        checkExpr(index->object.get(), false);
+        checkExpr(index->index.get(), false);
+        return;
+    }
+
+    if (auto* borrow = dynamic_cast<BorrowExpr*>(expr)) {
+        checkExpr(borrow->target.get(), false);
         return;
     }
 
@@ -640,17 +655,25 @@ std::optional<std::string> OwnershipChecker::resolveBorrowRootName(Expr* expr) c
         if (it == varStates.end()) {
             return std::nullopt;
         }
-        if (isTrackedOwned(it->second.type)) {
-            return ident->name;
-        }
         if (it->second.lexicalBorrow.has_value()) {
             return it->second.lexicalBorrow->rootName;
+        }
+        if (isTrackedOwned(it->second.type)) {
+            return ident->name;
         }
         return std::nullopt;
     }
 
     if (auto* member = dynamic_cast<MemberExpr*>(expr)) {
         return resolveBorrowRootName(member->object.get());
+    }
+
+    if (auto* index = dynamic_cast<IndexExpr*>(expr)) {
+        return resolveBorrowRootName(index->object.get());
+    }
+
+    if (auto* borrow = dynamic_cast<BorrowExpr*>(expr)) {
+        return resolveBorrowRootName(borrow->target.get());
     }
 
     if (auto* call = dynamic_cast<CallExpr*>(expr)) {
@@ -686,7 +709,7 @@ std::optional<std::string> OwnershipChecker::resolveBorrowRootName(Expr* expr) c
 }
 
 std::optional<BorrowToken> OwnershipChecker::resolveBorrowToken(Expr* expr, const ResolvedType& viewType) const {
-    if (!viewType.isView()) {
+    if (!isBorrowCarrierType(viewType)) {
         return std::nullopt;
     }
 
@@ -695,7 +718,12 @@ std::optional<BorrowToken> OwnershipChecker::resolveBorrowToken(Expr* expr, cons
         return std::nullopt;
     }
 
-    return BorrowToken{*rootName, viewType.viewKind};
+    std::string borrowKind = viewType.isView() ? viewType.viewKind : "look";
+    if (auto* borrowExpr = dynamic_cast<BorrowExpr*>(expr)) {
+        borrowKind = borrowExpr->isMutable ? "edit" : "look";
+    }
+
+    return BorrowToken{*rootName, borrowKind};
 }
 
 bool OwnershipChecker::acquireBorrowToken(const BorrowToken& token, const AstNode* node) {

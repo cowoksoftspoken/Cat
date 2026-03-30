@@ -1,0 +1,5 @@
+fn bad(nums: Vec[Int32]) {
+    var data = nums
+    val view: Span[Int32] = data.span()
+    data.clear()
+}

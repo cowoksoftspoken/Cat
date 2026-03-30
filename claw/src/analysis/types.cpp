@@ -9,13 +9,9 @@
 namespace claw::frontend {
 
 std::string canonicalTypeName(std::string_view name) {
-    if (name == "Str") return "Text";
-    if (name == "Char") return "Rune";
     if (name == "Int") return "Int64";
     if (name == "UInt") return "UInt64";
     if (name == "Float") return "Float64";
-    if (name == "Map") return "Table";
-    if (name == "Result") return "Outcome";
     return std::string(name);
 }
 
@@ -26,10 +22,6 @@ bool contains(const std::unordered_set<std::string>& set, const std::string& val
 }
 
 std::string surfaceTypeName(std::string_view name) {
-    if (name == "Text") return "Str";
-    if (name == "Rune") return "Char";
-    if (name == "Table") return "Map";
-    if (name == "Outcome") return "Result";
     return std::string(name);
 }
 
@@ -193,14 +185,13 @@ private:
     std::optional<TypeLayoutInfo> computeBuiltin(const ResolvedType& type) {
         if (type.name == "Unit") return scalarLayout(type.describe(), 0, 1);
         if (type.name == "Bool") return scalarLayout(type.describe(), 1, 1);
-        if (type.name == "Byte") return scalarLayout(type.describe(), 1, 1);
-        if (type.name == "Int8" || type.name == "UInt8" || type.name == "Bits8") return scalarLayout(type.describe(), 1, 1);
-        if (type.name == "Int16" || type.name == "UInt16" || type.name == "Bits16") return scalarLayout(type.describe(), 2, 2);
-        if (type.name == "Rune" || type.name == "Int32" || type.name == "UInt32" || type.name == "Bits32" || type.name == "Float32") return scalarLayout(type.describe(), 4, 4);
-        if (type.name == "Int64" || type.name == "UInt64" || type.name == "Bits64" || type.name == "Float64" || type.name == "USize" || type.name == "ISize") {
+        if (type.name == "Int8" || type.name == "UInt8") return scalarLayout(type.describe(), 1, 1);
+        if (type.name == "Int16" || type.name == "UInt16") return scalarLayout(type.describe(), 2, 2);
+        if (type.name == "Char" || type.name == "Int32" || type.name == "UInt32" || type.name == "Float32") return scalarLayout(type.describe(), 4, 4);
+        if (type.name == "Int64" || type.name == "UInt64" || type.name == "Float64" || type.name == "USize") {
             return scalarLayout(type.describe(), 8, 8);
         }
-        if (type.name == "Int128" || type.name == "UInt128" || type.name == "Bits128") return scalarLayout(type.describe(), 16, 16);
+        if (type.name == "Int128" || type.name == "UInt128" || type.name == "Float128") return scalarLayout(type.describe(), 16, 16);
 
         if (type.name == "Addr" || type.name == "RawPtr" || type.name == "RawMut") {
             return pointerLayout(type.describe(), target, true, TypeLayoutKind::Pointer, AbiPassKind::Direct);
@@ -211,11 +202,11 @@ private:
         if (type.name == "CStr") {
             return pointerLayout(type.describe(), target, true, TypeLayoutKind::Pointer, AbiPassKind::Direct, "claw-cstr");
         }
-        if (type.name == "OwnedCStr" || type.name == "Arena" || type.name == "Pool" || type.name == "Anchor" ||
-            type.name == "Table" || type.name == "Set" || type.name == "Heap" || type.name == "Ring") {
+        if (type.name == "OwnedCStr" || type.name == "Arena" || type.name == "Anchor" ||
+            type.name == "Map" || type.name == "Set" || type.name == "Queue") {
             return pointerLayout(type.describe(), target, false, TypeLayoutKind::OpaqueHandle, AbiPassKind::Direct, "claw-handle");
         }
-        if (type.name == "Text" || type.name == "Span") {
+        if (type.name == "Str" || type.name == "Span") {
             TypeLayoutInfo layout;
             layout.typeName = type.describe();
             layout.repr = "claw-slice";
@@ -229,7 +220,7 @@ private:
             layout.passKind = classifyAggregatePass(layout);
             return layout;
         }
-        if (type.name == "Bytes" || type.name == "Vec") {
+        if (type.name == "Vec") {
             TypeLayoutInfo layout;
             layout.typeName = type.describe();
             layout.repr = "claw-buffer";
@@ -491,19 +482,17 @@ bool sameType(const ResolvedType& left, const ResolvedType& right) {
 
 bool isNumericTypeName(const std::string& name) {
     static const std::unordered_set<std::string> numericTypes = {
-        "Byte", "Rune", "Int8", "Int16", "Int32", "Int64", "Int128",
+        "Char", "Int8", "Int16", "Int32", "Int64", "Int128",
         "UInt8", "UInt16", "UInt32", "UInt64", "UInt128",
-        "Bits8", "Bits16", "Bits32", "Bits64", "Bits128",
-        "Float32", "Float64", "USize", "ISize"};
+        "Float32", "Float64", "Float128", "USize"};
     return contains(numericTypes, name);
 }
 
 bool isIntegerLikeTypeName(const std::string& name) {
     static const std::unordered_set<std::string> integerLikeTypes = {
-        "Byte", "Rune", "Int8", "Int16", "Int32", "Int64", "Int128",
+        "Char", "Int8", "Int16", "Int32", "Int64", "Int128",
         "UInt8", "UInt16", "UInt32", "UInt64", "UInt128",
-        "Bits8", "Bits16", "Bits32", "Bits64", "Bits128",
-        "USize", "ISize"};
+        "USize"};
     return contains(integerLikeTypes, name);
 }
 
@@ -584,14 +573,13 @@ ResolvedType substituteType(
 
 TypeCatalog::TypeCatalog()
     : builtinPlainTypes{
-          "Bool", "Byte", "Rune", "Int8", "Int16", "Int32", "Int64", "Int128",
+          "Bool", "Char", "Int8", "Int16", "Int32", "Int64", "Int128",
           "UInt8", "UInt16", "UInt32", "UInt64", "UInt128",
-          "Bits8", "Bits16", "Bits32", "Bits64", "Bits128",
-          "Float32", "Float64", "USize", "ISize", "Unit"},
+          "Float32", "Float64", "Float128", "USize", "Unit"},
       builtinOwnedTypes{
-          "Text", "Bytes", "Span", "CStr", "OwnedCStr", "Vec", "Table", "Array", "Queue",
-          "Set", "Heap", "Ring", "Arena", "Pool", "Anchor", "Addr",
-          "RawPtr", "RawMut", "Fn", "Outcome"} {
+          "Str", "Span", "CStr", "OwnedCStr", "Vec", "Map", "Array", "Queue",
+          "Set", "Arena", "Anchor", "Addr",
+          "RawPtr", "RawMut", "Fn", "Maybe", "Result"} {
     for (const auto& name : builtinPlainTypes) {
         registerKnownTypeArity(name, 0);
     }
@@ -604,11 +592,9 @@ TypeCatalog::TypeCatalog()
     registerKnownTypeArity("Vec", 1);
     registerKnownTypeArity("Queue", 1);
     registerKnownTypeArity("Set", 1);
-    registerKnownTypeArity("Heap", 1);
-    registerKnownTypeArity("Ring", 1);
-    registerKnownTypeArity("Pool", 1);
-    registerKnownTypeArity("Table", 2);
-    registerKnownTypeArity("Outcome", 2);
+    registerKnownTypeArity("Maybe", 1);
+    registerKnownTypeArity("Map", 2);
+    registerKnownTypeArity("Result", 2);
 }
 
 void TypeCatalog::registerKnownTypeArity(const std::string& name, size_t arity) {

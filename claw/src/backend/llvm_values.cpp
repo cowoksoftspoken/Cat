@@ -354,13 +354,13 @@ std::string LlvmEmitter::extractLength(
     FunctionState& state,
     std::vector<std::string>& lines) {
     const std::string baseType = canonicalBackendTypeBase(stripGenericArgs(stripViewPrefix(receiverType)));
-    if (baseType == "Text" || baseType == "Span") {
-        const std::string lengthReg = state.temp("text.len");
+    if (baseType == "Str" || baseType == "Span") {
+        const std::string lengthReg = state.temp("str.len");
         lines.push_back("  " + lengthReg + " = extractvalue %claw.slice " + aggregateValue + ", 1");
         return lengthReg;
     }
-    if (baseType == "Bytes") {
-        const std::string lengthReg = state.temp("bytes.len");
+    if (baseType == "Vec") {
+        const std::string lengthReg = state.temp("vec.len");
         lines.push_back("  " + lengthReg + " = extractvalue %claw.buffer " + aggregateValue + ", 1");
         return lengthReg;
     }
@@ -373,13 +373,13 @@ std::string LlvmEmitter::extractPointer(
     FunctionState& state,
     std::vector<std::string>& lines) {
     const std::string baseType = canonicalBackendTypeBase(stripGenericArgs(stripViewPrefix(receiverType)));
-    if (baseType == "Text" || baseType == "Span") {
-        const std::string pointerReg = state.temp("text.ptr");
+    if (baseType == "Str" || baseType == "Span") {
+        const std::string pointerReg = state.temp("str.ptr");
         lines.push_back("  " + pointerReg + " = extractvalue %claw.slice " + aggregateValue + ", 0");
         return pointerReg;
     }
-    if (baseType == "Bytes") {
-        const std::string pointerReg = state.temp("bytes.ptr");
+    if (baseType == "Vec") {
+        const std::string pointerReg = state.temp("vec.ptr");
         lines.push_back("  " + pointerReg + " = extractvalue %claw.buffer " + aggregateValue + ", 0");
         return pointerReg;
     }

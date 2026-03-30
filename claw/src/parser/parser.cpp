@@ -5,6 +5,35 @@
 
 namespace claw::frontend {
 
+namespace {
+
+std::string legacySyntaxMessage(TokenKind kind) {
+    switch (kind) {
+    case TokenKind::KwHold:
+        return "Legacy binding syntax 'hold' has been removed. Use 'val' for immutable bindings.";
+    case TokenKind::KwSlot:
+        return "Legacy binding syntax 'slot' has been removed. Use 'var' for mutable bindings.";
+    case TokenKind::KwGive:
+        return "Legacy return syntax 'give' has been removed. Use 'return'.";
+    case TokenKind::KwWhen:
+        return "Legacy conditional syntax 'when' has been removed. Use 'if'.";
+    case TokenKind::KwOtherwise:
+        return "Legacy branch syntax 'otherwise' has been removed. Use 'else'.";
+    case TokenKind::KwLook:
+        return "Legacy borrow syntax 'look' has been removed. Use 'ref'.";
+    case TokenKind::KwEdit:
+        return "Legacy borrow syntax 'edit' has been removed. Use 'ref mut'.";
+    case TokenKind::KwOf:
+        return "Legacy generic syntax 'of' has been removed. Use bracket generics like Vec[Int32].";
+    case TokenKind::KwRealm:
+        return "Legacy module syntax 'realm' has been removed. File path and workspace structure define the module name.";
+    default:
+        return "Legacy syntax has been removed from the revised surface.";
+    }
+}
+
+} // namespace
+
 Parser::Parser(std::vector<Token> tokens) : tokens(std::move(tokens)) {}
 
 const Token& Parser::peek() const {
@@ -247,13 +276,7 @@ std::unique_ptr<RealmDecl> Parser::parseFile() {
     realm->span = spanFromToken(peek());
 
     if (match(TokenKind::KwRealm)) {
-        realm->span = spanFromToken(previous());
-        consumeNameToken("Expected realm name");
-        realm->name = previous().text;
-        while (match(TokenKind::Dot)) {
-            consumeNameToken("Expected realm name segment");
-            realm->name += "." + previous().text;
-        }
+        failAt(previous(), legacySyntaxMessage(TokenKind::KwRealm));
     }
 
     while (!isAtEnd()) {
@@ -406,9 +429,9 @@ std::unique_ptr<TypeNode> Parser::parseType() {
             type->viewKind = "look";
         }
     } else if (match(TokenKind::KwLook)) {
-        type->viewKind = "look";
+        failAt(previous(), legacySyntaxMessage(TokenKind::KwLook));
     } else if (match(TokenKind::KwEdit)) {
-        type->viewKind = "edit";
+        failAt(previous(), legacySyntaxMessage(TokenKind::KwEdit));
     }
 
     consumeNameToken("Expected type name");
@@ -417,11 +440,7 @@ std::unique_ptr<TypeNode> Parser::parseType() {
     if (check(TokenKind::LBracket)) {
         type->params = parseBracketTypeArguments();
     } else if (match(TokenKind::KwOf)) {
-        type->params.push_back(parseType());
-        while (isLegacyTypeArgumentSeparator()) {
-            advance();
-            type->params.push_back(parseType());
-        }
+        failAt(previous(), legacySyntaxMessage(TokenKind::KwOf));
     }
 
     return type;
@@ -448,10 +467,13 @@ std::unique_ptr<BlockStmt> Parser::parseBlock() {
 std::unique_ptr<Stmt> Parser::parseStatement() {
     if (match(TokenKind::KwVal)) return parseBinding(false);
     if (match(TokenKind::KwVar)) return parseBinding(true);
-    if (match(TokenKind::KwHold)) return parseBinding(false);
-    if (match(TokenKind::KwSlot)) return parseBinding(true);
-    if (match(TokenKind::KwReturn) || match(TokenKind::KwGive)) return parseGive();
-    if (match(TokenKind::KwIf) || match(TokenKind::KwWhen)) return parseWhen();
+    if (match(TokenKind::KwHold)) failAt(previous(), legacySyntaxMessage(TokenKind::KwHold));
+    if (match(TokenKind::KwSlot)) failAt(previous(), legacySyntaxMessage(TokenKind::KwSlot));
+    if (match(TokenKind::KwReturn)) return parseGive();
+    if (match(TokenKind::KwGive)) failAt(previous(), legacySyntaxMessage(TokenKind::KwGive));
+    if (match(TokenKind::KwIf)) return parseWhen();
+    if (match(TokenKind::KwWhen)) failAt(previous(), legacySyntaxMessage(TokenKind::KwWhen));
+    if (match(TokenKind::KwOtherwise)) failAt(previous(), legacySyntaxMessage(TokenKind::KwOtherwise));
     if (match(TokenKind::KwLoop)) return parseLoop();
     if (match(TokenKind::KwScan)) return parseScan();
     if (match(TokenKind::KwPick)) return parsePick();
@@ -550,8 +572,10 @@ std::unique_ptr<WhenStmt> Parser::parseWhen() {
     stmt->condition = parseExpression();
     stmt->thenBlock = parseBlock();
 
-    if (match(TokenKind::KwElse) || match(TokenKind::KwOtherwise)) {
+    if (match(TokenKind::KwElse)) {
         stmt->elseBlock = parseBlock();
+    } else if (match(TokenKind::KwOtherwise)) {
+        failAt(previous(), legacySyntaxMessage(TokenKind::KwOtherwise));
     }
     return stmt;
 }
@@ -647,20 +671,34 @@ std::unique_ptr<Expr> Parser::parseComparison() {
 }
 
 std::unique_ptr<Expr> Parser::parseBinary() {
-    auto left = parseCall();
+    auto left = parseUnary();
     while (match(TokenKind::Plus) || match(TokenKind::Minus) ||
            match(TokenKind::Star) || match(TokenKind::Slash)) {
         auto expr = std::make_unique<BinaryExpr>();
         expr->span = left->span;
         expr->op = previous().text;
         expr->left = std::move(left);
-        expr->right = parseCall();
+        expr->right = parseUnary();
         left = std::move(expr);
     }
     return left;
 }
 
-std::unique_ptr<Expr> Parser::parseCall() {
+std::unique_ptr<Expr> Parser::parseUnary() {
+    if (match(TokenKind::KwRef)) {
+        auto borrow = std::make_unique<BorrowExpr>();
+        borrow->span = spanFromToken(previous());
+        if (match(TokenKind::KwMut)) {
+            borrow->isMutable = true;
+        }
+        borrow->target = parseUnary();
+        return borrow;
+    }
+
+    return parsePostfix();
+}
+
+std::unique_ptr<Expr> Parser::parsePostfix() {
     auto expr = parsePrimary();
     while (true) {
         if (match(TokenKind::LParen)) {
@@ -684,6 +722,16 @@ std::unique_ptr<Expr> Parser::parseCall() {
             member->object = std::move(expr);
             member->member = previous().text;
             expr = std::move(member);
+            continue;
+        }
+
+        if (match(TokenKind::LBracket)) {
+            auto index = std::make_unique<IndexExpr>();
+            index->span = expr->span;
+            index->object = std::move(expr);
+            index->index = parseExpression();
+            consume(TokenKind::RBracket, "Expected ']' after index expression");
+            expr = std::move(index);
             continue;
         }
 
@@ -743,4 +791,6 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
 }
 
 } // namespace claw::frontend
+
+
 

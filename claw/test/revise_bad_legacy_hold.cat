@@ -1,0 +1,4 @@
+fn main() {
+    hold x: Int32 = 1
+    println(x)
+}

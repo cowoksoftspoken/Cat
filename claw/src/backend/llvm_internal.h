@@ -61,12 +61,7 @@ inline std::string stripGenericArgs(std::string_view type) {
 }
 
 inline std::string canonicalBackendTypeBase(std::string_view base) {
-    const std::string trimmed = trim(base);
-    if (trimmed == "Str") return "Text";
-    if (trimmed == "Char") return "Rune";
-    if (trimmed == "Map") return "Table";
-    if (trimmed == "Result") return "Outcome";
-    return trimmed;
+    return std::string(trim(base));
 }
 
 inline std::string lowercaseBackendIdentifier(std::string_view text) {
@@ -207,7 +202,7 @@ inline std::string receiverSegment(std::string_view text) {
 
 inline bool isSignedIntegerType(std::string_view typeName) {
     return typeName == "Int8" || typeName == "Int16" || typeName == "Int32" || typeName == "Int64" ||
-        typeName == "Int128" || typeName == "ISize";
+        typeName == "Int128";
 }
 
 inline bool isFloatingType(std::string_view typeName) {

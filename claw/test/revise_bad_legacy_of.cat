@@ -1,0 +1,7 @@
+fn sum(items: Vec of Int32) -> Int32 {
+    return 0
+}
+
+fn main() {
+    println(sum(Vec[Int32][1, 2, 3]))
+}

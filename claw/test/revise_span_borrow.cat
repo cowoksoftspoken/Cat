@@ -1,0 +1,4 @@
+fn first(view: Span[Int32]) -> ref Int32 {
+    val item: ref Int32 = ref view[0]
+    return item
+}

@@ -127,9 +127,8 @@ UInt128 maxSignedPositiveBits(unsigned bits) {
 
 std::optional<unsigned> integerLikeBitWidth(const std::string& typeName) {
     static const std::unordered_map<std::string, unsigned> widths = {
-        {"Byte", 8}, {"Int8", 8}, {"Int16", 16}, {"Int32", 32}, {"Int64", 64}, {"Int128", 128},
-        {"UInt8", 8}, {"UInt16", 16}, {"UInt32", 32}, {"UInt64", 64}, {"UInt128", 128},
-        {"Bits8", 8}, {"Bits16", 16}, {"Bits32", 32}, {"Bits64", 64}, {"Bits128", 128}};
+        {"Int8", 8}, {"Int16", 16}, {"Int32", 32}, {"Int64", 64}, {"Int128", 128},
+        {"UInt8", 8}, {"UInt16", 16}, {"UInt32", 32}, {"UInt64", 64}, {"UInt128", 128}};
     const auto it = widths.find(typeName);
     return it != widths.end() ? std::optional<unsigned>(it->second) : std::nullopt;
 }
@@ -143,15 +142,14 @@ bool integerLiteralFitsTarget(const std::string& magnitude, const std::string& t
     const unsigned pointerWidthBits = std::min(target.pointerWidthBits == 0 ? 64u : target.pointerWidthBits, 128u);
     const unsigned ptrdiffWidthBits = std::min(target.ptrdiffWidthBits == 0 ? 64u : target.ptrdiffWidthBits, 128u);
 
-    if (targetName == "Rune") {
+    if (targetName == "Char") {
         return value <= UInt128{0x10FFFF};
     }
     if (targetName == "USize") {
         return value <= maxUnsignedBits(pointerWidthBits);
     }
-    if (targetName == "ISize") {
-        return value <= maxSignedPositiveBits(ptrdiffWidthBits);
-    }
+
+
 
     if (const auto bits = integerLikeBitWidth(targetName)) {
         if (targetName.rfind("Int", 0) == 0) {
@@ -370,13 +368,13 @@ const std::vector<BuiltinMethodSpec>& builtinMethodSpecs() {
                 "byte_at",
                 "look",
                 {makePlainType("USize")},
-                makePlainType("Byte")});
+                makePlainType("UInt8")});
         };
         auto addByteEdgeMethods = [&](const std::string& receiverName) {
-            entries.push_back(BuiltinMethodSpec{receiverName, "first_byte", "look", {}, makePlainType("Byte")});
-            entries.push_back(BuiltinMethodSpec{receiverName, "last_byte", "look", {}, makePlainType("Byte")});
-            entries.push_back(BuiltinMethodSpec{receiverName, "find_byte", "look", {makePlainType("Byte")}, makePlainType("ISize")});
-            entries.push_back(BuiltinMethodSpec{receiverName, "count_byte", "look", {makePlainType("Byte")}, makePlainType("USize")});
+            entries.push_back(BuiltinMethodSpec{receiverName, "first_byte", "look", {}, makePlainType("UInt8")});
+            entries.push_back(BuiltinMethodSpec{receiverName, "last_byte", "look", {}, makePlainType("UInt8")});
+            entries.push_back(BuiltinMethodSpec{receiverName, "find_byte", "look", {makePlainType("UInt8")}, makePlainType("Int64")});
+            entries.push_back(BuiltinMethodSpec{receiverName, "count_byte", "look", {makePlainType("UInt8")}, makePlainType("USize")});
         };
         auto addTextSearchMethods = [&](const std::string& receiverName) {
             entries.push_back(BuiltinMethodSpec{receiverName, "starts_with", "look", {asViewType(makeOwnedType(receiverName), "look")}, makePlainType("Bool")});
@@ -409,56 +407,45 @@ const std::vector<BuiltinMethodSpec>& builtinMethodSpecs() {
                 true});
         };
 
-        addSizedLookMethods("Text");
-        addSizedLookMethods("Bytes");
+        addSizedLookMethods("Str");
         addSizedLookMethods("Span");
         addSizedLookMethods("Vec");
-        addSizedLookMethods("Table");
+        addSizedLookMethods("Map");
         addSizedLookMethods("Set");
-        addSizedLookMethods("Ring");
+        addSizedLookMethods("Queue");
 
-        addByteIndexMethod("Text");
-        addByteIndexMethod("Bytes");
-        addByteEdgeMethods("Text");
-        addByteEdgeMethods("Bytes");
-        addTextSearchMethods("Text");
-        addTextSearchMethods("Bytes");
+        addByteIndexMethod("Str");
+        addByteEdgeMethods("Str");
+        addTextSearchMethods("Str");
 
-        entries.push_back(BuiltinMethodSpec{"Text", "contains", "look", {asViewType(makeOwnedType("Text"), "look")}, makePlainType("Bool")});
-        entries.push_back(BuiltinMethodSpec{"Bytes", "contains", "look", {asViewType(makeOwnedType("Bytes"), "look")}, makePlainType("Bool")});
-        entries.push_back(BuiltinMethodSpec{"Text", "contains_byte", "look", {makePlainType("Byte")}, makePlainType("Bool")});
-        entries.push_back(BuiltinMethodSpec{"Bytes", "contains_byte", "look", {makePlainType("Byte")}, makePlainType("Bool")});
+        entries.push_back(BuiltinMethodSpec{"Str", "contains", "look", {asViewType(makeOwnedType("Str"), "look")}, makePlainType("Bool")});
+        entries.push_back(BuiltinMethodSpec{"Str", "contains_byte", "look", {makePlainType("UInt8")}, makePlainType("Bool")});
 
-        addSliceViewMethod("Text");
-        addSliceViewMethod("Bytes");
+        addSliceViewMethod("Str");
+        addSliceViewMethod("Span");
 
-        addCapacityLookMethod("Bytes");
         addCapacityLookMethod("Vec");
-        addCapacityLookMethod("Table");
+        addCapacityLookMethod("Map");
         addCapacityLookMethod("Set");
-        addCapacityLookMethod("Ring");
+        addCapacityLookMethod("Queue");
 
-        addClearEditMethod("Bytes");
         addClearEditMethod("Vec");
-        addClearEditMethod("Table");
+        addClearEditMethod("Map");
         addClearEditMethod("Set");
-        addClearEditMethod("Ring");
+        addClearEditMethod("Queue");
 
-        addReserveEditMethod("Bytes");
         addReserveEditMethod("Vec");
-        addReserveEditMethod("Table");
+        addReserveEditMethod("Map");
         addReserveEditMethod("Set");
-        addReserveEditMethod("Ring");
+        addReserveEditMethod("Queue");
 
-        addTruncateEditMethod("Bytes");
         addTruncateEditMethod("Vec");
-        addTruncateEditMethod("Ring");
+        addTruncateEditMethod("Queue");
 
-        addShrinkToFitEditMethod("Bytes");
         addShrinkToFitEditMethod("Vec");
-        addShrinkToFitEditMethod("Table");
+        addShrinkToFitEditMethod("Map");
         addShrinkToFitEditMethod("Set");
-        addShrinkToFitEditMethod("Ring");
+        addShrinkToFitEditMethod("Queue");
         return entries;
     }();
     return specs;
@@ -856,9 +843,9 @@ bool SemanticAnalyzer::validateOwnedLayoutDependency(
     if (type.isUnknown() || type.isOpaqueExternal() || type.isPlain() || type.isView() || type.isGeneric) {
         return false;
     }
-    if (type.name == "Text" || type.name == "Bytes" || type.name == "Span" || type.name == "CStr" ||
-        type.name == "OwnedCStr" || type.name == "Vec" || type.name == "Table" || type.name == "Set" ||
-        type.name == "Heap" || type.name == "Ring" || type.name == "Arena" || type.name == "Pool" ||
+    if (type.name == "Str" || type.name == "Span" || type.name == "CStr" ||
+        type.name == "OwnedCStr" || type.name == "Vec" || type.name == "Map" || type.name == "Set" ||
+        type.name == "Queue" || type.name == "Arena" || type.name == "Anchor" ||
         type.name == "Anchor" || type.name == "Addr" || type.name == "RawPtr" || type.name == "RawMut" ||
         type.name == "Fn") {
         return false;
@@ -962,6 +949,19 @@ std::optional<MethodSignature> SemanticAnalyzer::lookupMethodSignature(
         return std::nullopt;
     }
 
+    if (methodName == "span" && (receiverType.name == "Vec" || receiverType.name == "Array") && receiverType.params.size() == 1) {
+        MethodSignature signature;
+        signature.name = methodName;
+        signature.receiverType = asViewType(receiverType, "look");
+        ResolvedType spanType = makeOwnedType("Span");
+        spanType.params.push_back(receiverType.params.front());
+        signature.function.returnType = std::move(spanType);
+        signature.function.isExternal = true;
+        signature.viewReturnFromReceiver = true;
+        signature.isBuiltin = true;
+        return signature;
+    }
+
     for (const auto& spec : builtinMethodSpecs()) {
         if (spec.receiverName != receiverType.name || spec.methodName != methodName) {
             continue;
@@ -1026,7 +1026,7 @@ void SemanticAnalyzer::analyzeFnDecl(FnDecl* fn) {
             false,
             "Duplicate parameter name: " + fn->params[i].name,
             fn->params[i].span,
-            type.isView() ? std::optional<size_t>(i) : std::nullopt);
+            (type.isView() || type.name == "Span") ? std::optional<size_t>(i) : std::nullopt);
     }
 
     if (fn->body) {
@@ -1157,7 +1157,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             reportError(bind, "Raw address values may only appear inside raw blocks.");
         }
 
-        const std::optional<size_t> viewSourceParamIndex = (finalType.isView() && bind->value)
+        const std::optional<size_t> viewSourceParamIndex = ((finalType.isView() || finalType.name == "Span") && bind->value)
             ? resolveViewSourceParam(bind->value.get())
             : std::nullopt;
 
@@ -1186,7 +1186,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         if (outcomeType.isOpaqueExternal()) {
             reportError(tryStmt->expr.get(), opaqueExternalValueUseMessage(outcomeType, "try operand"));
         } else if (!outcomeType.isUnknown()) {
-            if (outcomeType.name != "Outcome" || outcomeType.params.size() != 2) {
+            if (outcomeType.name != "Result" || outcomeType.params.size() != 2) {
                 reportError(tryStmt->expr.get(), "`try` requires a Result value, got " + outcomeType.describe());
             } else {
                 const auto* outcomeInfo = lookupChoice(outcomeType.name);
@@ -1212,7 +1212,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         }
 
         if (tryStmt->autoPropagate) {
-            if (!currentSignature || currentSignature->returnType.name != "Outcome" || currentSignature->returnType.params.size() != 2) {
+            if (!currentSignature || currentSignature->returnType.name != "Result" || currentSignature->returnType.params.size() != 2) {
                 reportError(tryStmt, "`try` shorthand requires the current function to return Result[T, E].");
             } else if (!failType.isUnknown()) {
                 const ResolvedType& currentFailType = currentSignature->returnType.params[1];
@@ -1438,8 +1438,8 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             reportError(scan->iterable.get(), opaqueExternalValueUseMessage(iterableType, "scan iterable"));
         }
         ResolvedType itemType = makeUnknownType();
-        if (iterableType.name == "Text" || iterableType.name == "Bytes") {
-            itemType = makePlainType("Byte");
+        if (iterableType.name == "Str") {
+            itemType = makePlainType("UInt8");
         } else if (!iterableType.params.empty()) {
             itemType = iterableType.params.front();
         }
@@ -1525,7 +1525,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         if (outcomeType.isOpaqueExternal()) {
             reportError(lift->expr.get(), opaqueExternalValueUseMessage(outcomeType, "lift operand"));
         } else if (!outcomeType.isUnknown()) {
-            if (outcomeType.name != "Outcome" || outcomeType.params.size() != 2) {
+            if (outcomeType.name != "Result" || outcomeType.params.size() != 2) {
                 reportError(lift->expr.get(), "'lift' requires a Result value, got " + outcomeType.describe());
             } else {
                 const auto* outcomeInfo = lookupChoice(outcomeType.name);
@@ -1626,8 +1626,29 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr, const ResolvedType* expec
             type = makeFloatLiteralType();
         }
     } else if (dynamic_cast<StringExpr*>(expr)) {
-        type = makeOwnedType("Text");
+        type = makeOwnedType("Str");
     } else if (auto* ident = dynamic_cast<IdentExpr*>(expr)) {
+        if (expectedType && !expectedType->isUnknown() && !expectedType->isOpaqueExternal()) {
+            if (const auto* choiceInfo = lookupChoice(expectedType->name)) {
+                if (const auto variantInfo = resolveChoiceVariantInfo(*choiceInfo, *expectedType, ident->name)) {
+                    if (!variantInfo->payloadTypes.empty()) {
+                        reportError(
+                            ident,
+                            "Constructor '" + ident->name + "' requires " +
+                                std::to_string(variantInfo->payloadTypes.size()) + " argument(s). Use call syntax.");
+                    } else {
+                        ChoiceConstructorInfo constructorInfo;
+                        constructorInfo.resultType = *expectedType;
+                        constructorInfo.variantName = findChoiceVariantName(*choiceInfo, ident->name).value_or(ident->name);
+                        analysisResult.choiceConstructors[ident] = std::move(constructorInfo);
+                        type = *expectedType;
+                        analysisResult.exprTypes[expr] = type;
+                        return type;
+                    }
+                }
+            }
+        }
+
         const auto sym = lookupSymbol(ident->name);
         if (!sym) {
             reportError(ident, "Undefined variable: " + ident->name);
@@ -1636,6 +1657,58 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr, const ResolvedType* expec
         } else {
             type = makeUnknownType(ident->name);
         }
+    } else if (auto* index = dynamic_cast<IndexExpr*>(expr)) {
+        const ResolvedType objectType = analyzeExpr(index->object.get());
+        const ResolvedType expectedIndexType = makePlainType("USize");
+        const ResolvedType indexType = analyzeExpr(index->index.get(), &expectedIndexType);
+
+        if (objectType.isOpaqueExternal()) {
+            reportError(index->object.get(), opaqueExternalValueUseMessage(objectType, "index receiver"));
+        }
+        if (indexType.isOpaqueExternal()) {
+            reportError(index->index.get(), opaqueExternalValueUseMessage(indexType, "index value"));
+        }
+        if (!indexType.isUnknown() && !canAssignType(indexType, expectedIndexType)) {
+            reportError(index->index.get(), "Index expression must have type USize, got " + indexType.describe());
+        }
+
+        if (!objectType.isUnknown() && !objectType.isOpaqueExternal()) {
+            if (objectType.name == "Str") {
+                type = makePlainType("UInt8");
+            } else if ((objectType.name == "Span" || objectType.name == "Vec" || objectType.name == "Array") &&
+                       !objectType.params.empty()) {
+                type = objectType.params.front();
+            } else {
+                reportError(index, "Type '" + objectType.describe() + "' does not support index access.");
+            }
+        }
+    } else if (auto* borrow = dynamic_cast<BorrowExpr*>(expr)) {
+        const ResolvedType targetType = analyzeExpr(borrow->target.get());
+        const bool addressable =
+            dynamic_cast<IdentExpr*>(borrow->target.get()) ||
+            dynamic_cast<MemberExpr*>(borrow->target.get()) ||
+            dynamic_cast<IndexExpr*>(borrow->target.get());
+
+        if (!addressable) {
+            reportError(borrow, "Borrow target must be an addressable expression.");
+        }
+        if (targetType.isOpaqueExternal()) {
+            reportError(borrow->target.get(), opaqueExternalValueUseMessage(targetType, "borrow target"));
+        }
+        if (auto* index = dynamic_cast<IndexExpr*>(borrow->target.get())) {
+            if (const auto* objectType = lookupExprType(index->object.get())) {
+                if (objectType->name == "Vec") {
+                    reportError(borrow, "Direct element borrows from Vec are forbidden. Borrow through `.span()` first.");
+                }
+            }
+        }
+        if (borrow->isMutable && !canBorrowExprAsEdit(borrow->target.get())) {
+            reportError(borrow, "Mutable borrow requires mutable storage or ref mut access.");
+        }
+
+        type = targetType;
+        type.viewKind = borrow->isMutable ? "edit" : "look";
+        type.category = TypeCategory::View;
     } else if (auto* binary = dynamic_cast<BinaryExpr*>(expr)) {
         const bool isComparison = binary->op == "==" || binary->op == "!=" || binary->op == "<" || binary->op == "<=" ||
             binary->op == ">" || binary->op == ">=";
@@ -1933,6 +2006,14 @@ std::optional<size_t> SemanticAnalyzer::resolveViewSourceParam(const Expr* expr)
         return resolveViewSourceParam(member->object.get());
     }
 
+    if (auto* index = dynamic_cast<const IndexExpr*>(expr)) {
+        return resolveViewSourceParam(index->object.get());
+    }
+
+    if (auto* borrow = dynamic_cast<const BorrowExpr*>(expr)) {
+        return resolveViewSourceParam(borrow->target.get());
+    }
+
     if (auto* call = dynamic_cast<const CallExpr*>(expr)) {
         const FunctionSignature* signature = nullptr;
         std::optional<MethodSignature> methodSignature;
@@ -2071,6 +2152,26 @@ bool SemanticAnalyzer::canBorrowExprAsEdit(const Expr* expr) const {
             const auto sym = lookupSymbol(objectIdent->name);
             return sym && sym->kind == SymbolKind::Variable && sym->isMutable && sym->type.isOwned();
         }
+    }
+
+    if (auto* index = dynamic_cast<const IndexExpr*>(expr)) {
+        if (const auto* objectType = lookupExprType(index->object.get())) {
+            if (objectType->name == "Vec") {
+                return false;
+            }
+            if (objectType->isView()) {
+                return objectType->viewKind == "edit";
+            }
+        }
+
+        if (auto* objectIdent = dynamic_cast<const IdentExpr*>(index->object.get())) {
+            const auto sym = lookupSymbol(objectIdent->name);
+            return sym && sym->kind == SymbolKind::Variable && sym->isMutable && sym->type.name == "Array";
+        }
+    }
+
+    if (auto* borrow = dynamic_cast<const BorrowExpr*>(expr)) {
+        return borrow->isMutable && canBorrowExprAsEdit(borrow->target.get());
     }
 
     return false;

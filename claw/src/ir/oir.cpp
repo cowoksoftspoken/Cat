@@ -365,6 +365,16 @@ OirValue lowerExpr(
         return OirValue{value->value ? "true" : "false", exprType(sema, expr), false};
     }
     if (auto* ident = dynamic_cast<const IdentExpr*>(expr)) {
+        if (const auto ctorIt = sema.result().choiceConstructors.find(ident);
+            ctorIt != sema.result().choiceConstructors.end()) {
+            const std::string result = context.tempName();
+            appendInst(context, blockIndex, OirChoiceMakeInst{
+                result,
+                ctorIt->second.resultType.describe(),
+                ctorIt->second.variantName,
+                {}});
+            return OirValue{result, exprType(sema, expr), false};
+        }
         return OirValue{ident->name, exprType(sema, expr), false};
     }
     if (auto* member = dynamic_cast<const MemberExpr*>(expr)) {
