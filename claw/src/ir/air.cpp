@@ -75,7 +75,24 @@ std::string AirEmitter::emitFn(const FnDecl* fn, int indent) const {
     out << (signature ? signature->returnType.describe() : "<unknown>") << "\n";
 
     if (fn->body) {
-        out << emitBlock(fn->body.get(), indent + 1);
+        const ExprStmt* implicitTailExpr = nullptr;
+        if (!fn->body->statements.empty()) {
+            implicitTailExpr = dynamic_cast<const ExprStmt*>(fn->body->statements.back().get());
+        }
+
+        for (const auto& stmt : fn->body->statements) {
+            if (implicitTailExpr && stmt.get() == implicitTailExpr) {
+                out << indentText(indent + 1) << "return ";
+                if (implicitTailExpr->expr) {
+                    out << emitExpr(implicitTailExpr->expr.get());
+                } else {
+                    out << "unit";
+                }
+                out << "\n";
+            } else {
+                out << emitStmt(stmt.get(), indent + 1);
+            }
+        }
     }
     return out.str();
 }

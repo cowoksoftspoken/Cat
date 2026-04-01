@@ -1029,9 +1029,54 @@ void SemanticAnalyzer::analyzeFnDecl(FnDecl* fn) {
             (type.isView() || type.name == "Span") ? std::optional<size_t>(i) : std::nullopt);
     }
 
+    bool hasImplicitTailReturn = false;
     if (fn->body) {
         analyzeBlock(fn->body.get());
+
+        if (!fn->body->statements.empty()) {
+            if (auto* tailExprStmt = dynamic_cast<ExprStmt*>(fn->body->statements.back().get())) {
+                hasImplicitTailReturn = true;
+                const ResolvedType valueType = tailExprStmt->expr
+                    ? (lookupExprType(tailExprStmt->expr.get()) ? *lookupExprType(tailExprStmt->expr.get()) : makeUnknownType())
+                    : makePlainType("Unit");
+
+                if (valueType.isOpaqueExternal()) {
+                    reportError(tailExprStmt->expr.get(), opaqueExternalValueUseMessage(valueType, "implicit return value"));
+                } else if (currentSignature && currentSignature->returnType.isView()) {
+                    if (!canBorrowAsView(valueType, currentSignature->returnType)) {
+                        reportError(
+                            tailExprStmt,
+                            "Implicit return type mismatch in function '" + currentFunction->name + "': expected " +
+                                currentSignature->returnType.describe() + ", got " + valueType.describe());
+                    }
+                    const auto sourceParamIndex = tailExprStmt->expr ? resolveViewSourceParam(tailExprStmt->expr.get()) : std::nullopt;
+                    if (!sourceParamIndex.has_value()) {
+                        reportError(
+                            tailExprStmt,
+                            "Returned ref value must come from one of the function's ref parameters. It cannot point into a local value or temporary.");
+                    } else if (!currentViewReturnSeen) {
+                        currentViewReturnSourceParam = sourceParamIndex;
+                        currentViewReturnSeen = true;
+                    } else if (currentViewReturnSourceParam != sourceParamIndex) {
+                        reportError(tailExprStmt, "All returned ref values in a function must come from the same parameter.");
+                    }
+                } else if (currentSignature && currentFunction && !canAssignType(valueType, currentSignature->returnType)) {
+                    reportError(
+                        tailExprStmt,
+                        "Implicit return type mismatch in function '" + currentFunction->name + "': expected " +
+                            currentSignature->returnType.describe() + ", got " + valueType.describe());
+                }
+
+                if (rawDepth == 0 && isRawAddressType(valueType)) {
+                    reportError(tailExprStmt, "Raw address values may only appear inside raw blocks.");
+                }
+            }
+        }
     }
+
+    const bool unitReturn = currentSignature &&
+        currentSignature->returnType.viewKind.empty() &&
+        currentSignature->returnType.name == "Unit";
 
     if (currentSignature && currentSignature->returnType.isView()) {
         auto signatureIt = analysisResult.functionSignatures.find(fn);
@@ -1042,6 +1087,11 @@ void SemanticAnalyzer::analyzeFnDecl(FnDecl* fn) {
         if (!currentViewReturnSeen) {
             reportError(fn, "View-returning functions must return a view derived from one of their view parameters.");
         }
+    } else if (currentSignature && !unitReturn && !hasImplicitTailReturn && (!fn->body || !blockDefinitelyTerminates(fn->body.get()))) {
+        reportError(
+            fn,
+            "Function '" + fn->name + "' must end with a value of type " +
+                currentSignature->returnType.describe() + " or use explicit return.");
     }
 
     currentFunction = previousFunction;
@@ -1364,12 +1414,12 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             }
             const auto sourceParamIndex = give->value ? resolveViewSourceParam(give->value.get()) : std::nullopt;
             if (!sourceParamIndex.has_value()) {
-                reportError(give, "Returned view must be derived from a view parameter. Views cannot escape local owners or temporaries.");
+                reportError(give, "Returned ref value must come from one of the function's ref parameters. It cannot point into a local value or temporary.");
             } else if (!currentViewReturnSeen) {
                 currentViewReturnSourceParam = sourceParamIndex;
                 currentViewReturnSeen = true;
             } else if (currentViewReturnSourceParam != sourceParamIndex) {
-                reportError(give, "All returned views in a function must be derived from the same view parameter.");
+                reportError(give, "All returned ref values in a function must come from the same parameter.");
             }
         } else if (currentSignature && currentFunction && !canAssignType(valueType, currentSignature->returnType)) {
             reportError(
@@ -2150,8 +2200,12 @@ bool SemanticAnalyzer::canBorrowExprAsEdit(const Expr* expr) const {
 
         if (auto* objectIdent = dynamic_cast<const IdentExpr*>(member->object.get())) {
             const auto sym = lookupSymbol(objectIdent->name);
-            return sym && sym->kind == SymbolKind::Variable && sym->isMutable && sym->type.isOwned();
+            if (sym && sym->kind == SymbolKind::Variable && sym->isMutable && sym->type.isOwned()) {
+                return true;
+            }
         }
+
+        return canBorrowExprAsEdit(member->object.get());
     }
 
     if (auto* index = dynamic_cast<const IndexExpr*>(expr)) {
@@ -2166,8 +2220,12 @@ bool SemanticAnalyzer::canBorrowExprAsEdit(const Expr* expr) const {
 
         if (auto* objectIdent = dynamic_cast<const IdentExpr*>(index->object.get())) {
             const auto sym = lookupSymbol(objectIdent->name);
-            return sym && sym->kind == SymbolKind::Variable && sym->isMutable && sym->type.name == "Array";
+            if (sym && sym->kind == SymbolKind::Variable && sym->isMutable && sym->type.name == "Array") {
+                return true;
+            }
         }
+
+        return canBorrowExprAsEdit(index->object.get());
     }
 
     if (auto* borrow = dynamic_cast<const BorrowExpr*>(expr)) {
@@ -2246,6 +2304,7 @@ bool SemanticAnalyzer::stmtDefinitelyTerminates(const Stmt* stmt) const {
 }
 
 } // namespace claw::frontend
+
 
 
 

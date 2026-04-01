@@ -292,12 +292,12 @@ void validateEntryPoint(
 
     const auto* signature = sema.lookupFunctionSignature(entryFn);
     const bool validReturn = signature &&
-        signature->returnType.name == "Unit" &&
-        signature->returnType.viewKind.empty();
+        signature->returnType.viewKind.empty() &&
+        ((signature->returnType.name == "Unit") || (signature->returnType.name == "Int32"));
     if (!signature || !signature->paramTypes.empty() || !validReturn) {
         claw::frontend::Diagnostic diagnostic;
         diagnostic.stage = "entry";
-        diagnostic.message = "`main` must take no parameters and return Unit implicitly or explicitly.";
+        diagnostic.message = "`main` must take no parameters and return Unit or Int32.";
         diagnostic.span = entryFn->span;
         diagnostic.path = unit.path.string();
         throw claw::frontend::DiagnosticError("Entry point validation failed.", {diagnostic});

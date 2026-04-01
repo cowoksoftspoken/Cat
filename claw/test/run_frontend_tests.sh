@@ -26,7 +26,7 @@ if [[ "$revise_air_output" != *"air.module revise_surface"* ]] ||
    [[ "$revise_air_output" != *"val greeting: Str"* ]] ||
    [[ "$revise_air_output" != *"var total: Int64 = 42 : Int64"* ]] ||
    [[ "$revise_air_output" != *"scan item: UInt8 over greeting : Str"* ]] ||
-   [[ "$revise_air_output" != *"expr println(sum("* ]]; then
+   [[ "$revise_air_output" != *"return println(sum("* ]]; then
   echo "revise_surface AIR did not reflect the revised val/var + module surface" >&2
   exit 1
 fi
@@ -42,8 +42,8 @@ if bad_main_output="$("$CLAW_EXE" validate "$ROOT_DIR/test/revise_bad_main_retur
   echo "expected revise_bad_main_return to fail validation, but it passed" >&2
   exit 1
 fi
-if [[ "$bad_main_output" != *'`main` must take no parameters and return Unit implicitly or explicitly.'* ]]; then
-  echo "revise_bad_main_return did not report the revised Unit entry rule" >&2
+if [[ "$bad_main_output" != *'`main` must take no parameters and return Unit or Int32.'* ]]; then
+  echo "revise_bad_main_return did not report the revised entry return rule" >&2
   exit 1
 fi
 
@@ -110,11 +110,34 @@ if bad_vec_span_mut_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_vec_m
   echo "expected revise_bad_vec_mutate_while_span to fail, but it passed" >&2
   exit 1
 fi
-if [[ "$bad_vec_span_mut_output" != *"Cannot create ref mut view while another view is active -> data"* ]]; then
+if [[ "$bad_vec_span_mut_output" != *'Cannot create ref mut view of `data` while `data` is still borrowed.'* ]]; then
   echo "revise_bad_vec_mutate_while_span did not report the active Span borrow conflict" >&2
   exit 1
 fi
 
+
+echo "[check/pass] test/revise_field_borrow_paths.cat"
+"$CLAW_EXE" check "$ROOT_DIR/test/revise_field_borrow_paths.cat"
+
+echo "[check/fail] test/revise_bad_field_prefix_borrow.cat"
+if bad_field_prefix_borrow_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_field_prefix_borrow.cat" 2>&1)"; then
+  echo "expected revise_bad_field_prefix_borrow to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$bad_field_prefix_borrow_output" != *'Cannot create ref mut view of `local.db.port` while `local.db` is still borrowed.'* ]]; then
+  echo "revise_bad_field_prefix_borrow did not report the field-prefix borrow conflict" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/revise_bad_field_prefix_mutation.cat"
+if bad_field_prefix_mutation_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_field_prefix_mutation.cat" 2>&1)"; then
+  echo "expected revise_bad_field_prefix_mutation to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$bad_field_prefix_mutation_output" != *'Cannot create ref mut view of `local.db` while `local.db.host` is still borrowed.'* ]]; then
+  echo "revise_bad_field_prefix_mutation did not report the field-prefix parent borrow conflict" >&2
+  exit 1
+fi
 echo "[check/fail] legacy hold"
 if legacy_hold_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_legacy_hold.cat" 2>&1)"; then
   echo "expected revise_bad_legacy_hold to fail, but it passed" >&2
@@ -204,3 +227,7 @@ if [[ "$legacy_of_output" != *"Legacy generic syntax 'of' has been removed."* ]]
   echo "revise_bad_legacy_of did not report the of -> [] migration" >&2
   exit 1
 fi
+
+
+
+

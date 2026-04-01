@@ -1,5 +1,5 @@
 fn square(value: Int32) -> Int32 {
-    return value * value
+    value * value
 }
 
 fn main() {

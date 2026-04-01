@@ -1,0 +1,14 @@
+shape Db {
+    host: Str
+    port: Int32
+}
+
+shape Config {
+    db: Db
+}
+
+fn bad(cfg: Config) {
+    var local = cfg
+    val host: ref Str = ref local.db.host
+    val db: ref mut Db = ref mut local.db
+}

@@ -124,17 +124,17 @@ std::filesystem::path buildNativeExecutable(
         std::filesystem::create_directories(outputDir);
     }
 
-    const auto tempLlPath = makeTempLlPath();
+    auto llvmOutputPath = absoluteOutput;
+    llvmOutputPath.replace_extension(".ll");
     const std::string llvmIr = claw::frontend::emitNativeLlvmIr(entryRealm, units);
-    writeTextFile(tempLlPath, llvmIr);
+    writeTextFile(llvmOutputPath, llvmIr);
 
-    const int result = runClangLink(tempLlPath, runtimePath, absoluteOutput);
+    const int result = runClangLink(llvmOutputPath, runtimePath, absoluteOutput);
     if (result != 0) {
         throw std::runtime_error(
-            "Native build failed while invoking clang. Temporary LLVM IR was left at '" + tempLlPath.string() + "'.");
+            "Native build failed while invoking clang. Generated LLVM IR was left at '" + llvmOutputPath.string() + "'.");
     }
 
-    std::filesystem::remove(tempLlPath);
     return absoluteOutput;
 }
 

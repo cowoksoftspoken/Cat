@@ -13,10 +13,14 @@ bool isDefinitelyInitialized(StorageState state) {
     return state == StorageState::Initialized;
 }
 
-
 bool isBorrowCarrierType(const ResolvedType& type) {
     return type.isView() || type.name == "Span";
 }
+
+bool isBorrowRootType(const ResolvedType& type) {
+    return type.isOwned() || isBorrowCarrierType(type);
+}
+
 StorageState mergeStorageState(StorageState left, StorageState right) {
     return left == right ? left : StorageState::MaybeUninitialized;
 }
@@ -28,24 +32,100 @@ std::string unavailableValueMessage(StorageState state, const std::string& name)
     return "Use of uninitialized value -> " + name;
 }
 
+bool isIndexedPathSegment(std::string_view segment) {
+    return segment == "[]";
+}
+
+std::string formatBorrowTarget(const BorrowToken& token) {
+    std::string text = token.rootName;
+    for (const auto& segment : token.accessPath) {
+        if (isIndexedPathSegment(segment)) {
+            text += "[]";
+        } else {
+            text += "." + segment;
+        }
+    }
+    return text;
+}
+
+bool borrowPathsOverlap(const BorrowToken& left, const BorrowToken& right) {
+    if (left.rootName != right.rootName) {
+        return false;
+    }
+
+    const size_t shared = std::min(left.accessPath.size(), right.accessPath.size());
+    for (size_t i = 0; i < shared; ++i) {
+        if (left.accessPath[i] != right.accessPath[i]) {
+            return isIndexedPathSegment(left.accessPath[i]) || isIndexedPathSegment(right.accessPath[i]);
+        }
+        if (isIndexedPathSegment(left.accessPath[i])) {
+            return true;
+        }
+    }
+
+    return true;
+}
+
+bool borrowPathIsPrefix(const BorrowToken& prefix, const BorrowToken& value) {
+    if (prefix.rootName != value.rootName || prefix.accessPath.size() > value.accessPath.size()) {
+        return false;
+    }
+
+    for (size_t i = 0; i < prefix.accessPath.size(); ++i) {
+        if (prefix.accessPath[i] != value.accessPath[i]) {
+            return false;
+        }
+        if (isIndexedPathSegment(prefix.accessPath[i]) && i + 1 != prefix.accessPath.size()) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool borrowTokensConflict(const BorrowToken& left, const BorrowToken& right) {
+    return borrowPathsOverlap(left, right) && (left.viewKind == "edit" || right.viewKind == "edit");
+}
+
+const BorrowToken* firstActiveBorrow(const TrackedVar& state) {
+    return state.activeBorrows.empty() ? nullptr : &state.activeBorrows.front();
+}
+
+bool hasActiveBorrow(const TrackedVar& state) {
+    return !state.activeBorrows.empty();
+}
+
+std::string borrowKindLabel(std::string_view viewKind) {
+    return viewKind == "edit" ? "ref mut view" : "ref view";
+}
+
+std::string borrowConflictMessage(const BorrowToken& requested, const BorrowToken& existing) {
+    return "Cannot create " + borrowKindLabel(requested.viewKind) + " of `" +
+        formatBorrowTarget(requested) + "` while `" + formatBorrowTarget(existing) +
+        "` is still borrowed.";
+}
+
+std::string ownerMutationConflictMessage(std::string_view ownerName, const BorrowToken& existing, std::string_view action) {
+    return "Cannot " + std::string(action) + " `" + std::string(ownerName) +
+        "` while `" + formatBorrowTarget(existing) + "` is still borrowed.";
+}
+
+std::string pathMutationConflictMessage(std::string_view target, const BorrowToken& existing) {
+    return "Cannot mutate `" + std::string(target) + "` while `" + formatBorrowTarget(existing) + "` is still borrowed.";
+}
+
 void releaseBorrowTokenInStateMap(
     std::unordered_map<std::string, TrackedVar>& stateMap,
     const BorrowToken& token) {
     const auto it = stateMap.find(token.rootName);
-    if (it == stateMap.end() || !it->second.type.isOwned()) {
+    if (it == stateMap.end() || !isBorrowRootType(it->second.type)) {
         return;
     }
 
-    auto& state = it->second;
-    if (token.viewKind == "look") {
-        if (state.sharedBorrows > 0) {
-            --state.sharedBorrows;
-        }
-        return;
-    }
-
-    if (token.viewKind == "edit") {
-        state.mutableBorrow = false;
+    auto& borrows = it->second.activeBorrows;
+    const auto match = std::find(borrows.rbegin(), borrows.rend(), token);
+    if (match != borrows.rend()) {
+        borrows.erase(std::prev(match.base()));
     }
 }
 
@@ -102,7 +182,7 @@ void OwnershipChecker::checkFnDecl(FnDecl* fn) {
             const ResolvedType type = i < signature->paramTypes.size() ? signature->paramTypes[i] : makeUnknownType();
             defineTrackedVar(
                 fn->params[i].name,
-                TrackedVar{type, false, StorageState::Initialized, 0, false, std::nullopt});
+                TrackedVar{type, false, StorageState::Initialized, {}, std::nullopt});
         }
     }
 
@@ -159,6 +239,14 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
 
             if (it != varStates.end()) {
                 auto& state = it->second;
+                if (hasActiveBorrow(state)) {
+                    if (const auto* borrow = firstActiveBorrow(state)) {
+                        reportError(assign, ownerMutationConflictMessage(ident->name, *borrow, "assign to"));
+                    } else {
+                        reportError(assign, "Cannot assign to value while it is borrowed -> " + ident->name);
+                    }
+                }
+
                 if (isBorrowCarrierType(state.type)) {
                     releaseLexicalBorrow(state);
                     state.lexicalBorrow.reset();
@@ -170,14 +258,10 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
                         }
                     }
                 } else {
-                    if (isTrackedOwned(state.type) && (state.sharedBorrows > 0 || state.mutableBorrow)) {
-                        reportError(assign, "Cannot assign to value while it is borrowed -> " + ident->name);
-                    }
                     if (shouldScheduleDrop(state)) {
                         recordDropBeforeStmt(assign, ident->name, state.type);
                     }
-                    state.sharedBorrows = 0;
-                    state.mutableBorrow = false;
+                    state.activeBorrows.clear();
                 }
                 state.storageState = StorageState::Initialized;
             }
@@ -191,19 +275,38 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
         if (auto* member = dynamic_cast<MemberExpr*>(assign->target.get())) {
             checkExpr(member->object.get(), false);
 
-            if (const auto rootName = resolveBorrowRootName(member->object.get())) {
-                const auto it = varStates.find(*rootName);
-                const ResolvedType objectType = typeOfExpr(member->object.get());
-                const bool viaEditView = objectType.isView() && objectType.viewKind == "edit";
-                if (it != varStates.end() && isTrackedOwned(it->second.type) && !viaEditView &&
-                    (it->second.sharedBorrows > 0 || it->second.mutableBorrow)) {
-                    reportError(assign, "Cannot mutate value while it is borrowed -> " + *rootName);
+            const ResolvedType objectType = typeOfExpr(member->object.get());
+            const auto objectPath = resolveBorrowPath(member->object.get());
+            if (const auto targetPath = resolveBorrowPath(assign->target.get())) {
+                const auto it = varStates.find(targetPath->rootName);
+                if (it != varStates.end() && isBorrowRootType(it->second.type)) {
+                    BorrowToken mutationTarget = *targetPath;
+                    mutationTarget.viewKind = "edit";
+
+                    std::optional<BorrowToken> authorizingBorrow;
+                    if (objectType.isView() && objectType.viewKind == "edit" && objectPath.has_value()) {
+                        for (const auto& active : it->second.activeBorrows) {
+                            if (active.viewKind == "edit" && borrowPathIsPrefix(active, *objectPath)) {
+                                authorizingBorrow = active;
+                                break;
+                            }
+                        }
+                    }
+
+                    for (const auto& active : it->second.activeBorrows) {
+                        if (authorizingBorrow.has_value() && active == *authorizingBorrow) {
+                            continue;
+                        }
+                        if (borrowTokensConflict(active, mutationTarget)) {
+                            reportError(assign, pathMutationConflictMessage(formatBorrowTarget(mutationTarget), active));
+                            break;
+                        }
+                    }
                 }
             }
         }
         return;
     }
-
     if (auto* give = dynamic_cast<GiveStmt*>(stmt)) {
         if (give->value) {
             checkExpr(give->value.get(), typeOfExpr(give->value.get()).isOwned());
@@ -290,7 +393,7 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
         enterScope(scan->body.get(), ScopeKind::LoopBoundary);
         defineTrackedVar(
             scan->itemName,
-            TrackedVar{itemType, false, StorageState::Initialized, 0, false, std::nullopt});
+            TrackedVar{itemType, false, StorageState::Initialized, {}, std::nullopt});
         for (auto& stmtInBlock : scan->body->statements) {
             checkStmt(stmtInBlock.get());
         }
@@ -330,7 +433,7 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
                             : makeUnknownType();
                         defineTrackedVar(
                             branch.bindings[i],
-                            TrackedVar{payloadType, false, StorageState::Initialized, 0, false, std::nullopt});
+                            TrackedVar{payloadType, false, StorageState::Initialized, {}, std::nullopt});
                     }
                 }
             }
@@ -369,7 +472,7 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
         enterScope(lift->failBlock.get(), ScopeKind::Normal);
         defineTrackedVar(
             lift->failName,
-            TrackedVar{failType, false, StorageState::Initialized, 0, false, std::nullopt});
+            TrackedVar{failType, false, StorageState::Initialized, {}, std::nullopt});
         for (auto& stmtInBlock : lift->failBlock->statements) {
             checkStmt(stmtInBlock.get());
         }
@@ -378,7 +481,7 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
         varStates = baseline;
         defineTrackedVar(
             lift->valueName,
-            TrackedVar{okType, false, StorageState::Initialized, 0, false, std::nullopt});
+            TrackedVar{okType, false, StorageState::Initialized, {}, std::nullopt});
         return;
     }
 
@@ -405,7 +508,7 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
             enterScope(tryStmt->failBlock.get(), ScopeKind::Normal);
             defineTrackedVar(
                 tryStmt->failName,
-                TrackedVar{failType, false, StorageState::Initialized, 0, false, std::nullopt});
+                TrackedVar{failType, false, StorageState::Initialized, {}, std::nullopt});
             for (auto& stmtInBlock : tryStmt->failBlock->statements) {
                 checkStmt(stmtInBlock.get());
             }
@@ -415,7 +518,7 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
 
         defineTrackedVar(
             tryStmt->name,
-            TrackedVar{okType, false, StorageState::Initialized, 0, false, std::nullopt});
+            TrackedVar{okType, false, StorageState::Initialized, {}, std::nullopt});
         return;
     }
 
@@ -457,12 +560,15 @@ void OwnershipChecker::checkExpr(Expr* expr, bool isConsume) {
         }
 
         if (isConsume && isTrackedOwned(state.type)) {
-            if (state.sharedBorrows > 0 || state.mutableBorrow) {
-                reportError(ident, "Cannot move value while it is borrowed -> " + ident->name);
+            if (hasActiveBorrow(state)) {
+                if (const auto* borrow = firstActiveBorrow(state)) {
+                    reportError(ident, ownerMutationConflictMessage(ident->name, *borrow, "move"));
+                } else {
+                    reportError(ident, "Cannot move value while it is borrowed -> " + ident->name);
+                }
             }
             state.storageState = StorageState::Moved;
-            state.sharedBorrows = 0;
-            state.mutableBorrow = false;
+            state.activeBorrows.clear();
         }
         return;
     }
@@ -645,7 +751,7 @@ std::optional<MethodSignature> OwnershipChecker::resolveMethodSignature(const Ex
     return semantic->lookupMethodSignature(callee);
 }
 
-std::optional<std::string> OwnershipChecker::resolveBorrowRootName(Expr* expr) const {
+std::optional<BorrowToken> OwnershipChecker::resolveBorrowPath(Expr* expr) const {
     if (!expr) {
         return std::nullopt;
     }
@@ -656,24 +762,34 @@ std::optional<std::string> OwnershipChecker::resolveBorrowRootName(Expr* expr) c
             return std::nullopt;
         }
         if (it->second.lexicalBorrow.has_value()) {
-            return it->second.lexicalBorrow->rootName;
+            return it->second.lexicalBorrow;
         }
-        if (isTrackedOwned(it->second.type)) {
-            return ident->name;
+        if (isBorrowRootType(it->second.type)) {
+            return BorrowToken{ident->name, {}, {}};
         }
         return std::nullopt;
     }
 
     if (auto* member = dynamic_cast<MemberExpr*>(expr)) {
-        return resolveBorrowRootName(member->object.get());
+        auto path = resolveBorrowPath(member->object.get());
+        if (!path.has_value()) {
+            return std::nullopt;
+        }
+        path->accessPath.push_back(member->member);
+        return path;
     }
 
     if (auto* index = dynamic_cast<IndexExpr*>(expr)) {
-        return resolveBorrowRootName(index->object.get());
+        auto path = resolveBorrowPath(index->object.get());
+        if (!path.has_value()) {
+            return std::nullopt;
+        }
+        path->accessPath.push_back("[]");
+        return path;
     }
 
     if (auto* borrow = dynamic_cast<BorrowExpr*>(expr)) {
-        return resolveBorrowRootName(borrow->target.get());
+        return resolveBorrowPath(borrow->target.get());
     }
 
     if (auto* call = dynamic_cast<CallExpr*>(expr)) {
@@ -682,14 +798,14 @@ std::optional<std::string> OwnershipChecker::resolveBorrowRootName(Expr* expr) c
         if (methodSignature.has_value()) {
             if (methodSignature->viewReturnFromReceiver) {
                 if (auto* member = dynamic_cast<MemberExpr*>(call->callee.get())) {
-                    return resolveBorrowRootName(member->object.get());
+                    return resolveBorrowPath(member->object.get());
                 }
                 return std::nullopt;
             }
             if (methodSignature->viewReturnSourceArg.has_value()) {
                 const size_t sourceIndex = *methodSignature->viewReturnSourceArg;
                 if (sourceIndex < call->args.size()) {
-                    return resolveBorrowRootName(call->args[sourceIndex].get());
+                    return resolveBorrowPath(call->args[sourceIndex].get());
                 }
                 return std::nullopt;
             }
@@ -702,10 +818,18 @@ std::optional<std::string> OwnershipChecker::resolveBorrowRootName(Expr* expr) c
         if (sourceIndex >= call->args.size()) {
             return std::nullopt;
         }
-        return resolveBorrowRootName(call->args[sourceIndex].get());
+        return resolveBorrowPath(call->args[sourceIndex].get());
     }
 
     return std::nullopt;
+}
+
+std::optional<std::string> OwnershipChecker::resolveBorrowRootName(Expr* expr) const {
+    const auto path = resolveBorrowPath(expr);
+    if (!path.has_value()) {
+        return std::nullopt;
+    }
+    return path->rootName;
 }
 
 std::optional<BorrowToken> OwnershipChecker::resolveBorrowToken(Expr* expr, const ResolvedType& viewType) const {
@@ -713,22 +837,22 @@ std::optional<BorrowToken> OwnershipChecker::resolveBorrowToken(Expr* expr, cons
         return std::nullopt;
     }
 
-    const auto rootName = resolveBorrowRootName(expr);
-    if (!rootName.has_value()) {
+    auto token = resolveBorrowPath(expr);
+    if (!token.has_value()) {
         return std::nullopt;
     }
 
-    std::string borrowKind = viewType.isView() ? viewType.viewKind : "look";
+    token->viewKind = viewType.isView() ? viewType.viewKind : "look";
     if (auto* borrowExpr = dynamic_cast<BorrowExpr*>(expr)) {
-        borrowKind = borrowExpr->isMutable ? "edit" : "look";
+        token->viewKind = borrowExpr->isMutable ? "edit" : "look";
     }
 
-    return BorrowToken{*rootName, borrowKind};
+    return token;
 }
 
 bool OwnershipChecker::acquireBorrowToken(const BorrowToken& token, const AstNode* node) {
     const auto it = varStates.find(token.rootName);
-    if (it == varStates.end() || !isTrackedOwned(it->second.type)) {
+    if (it == varStates.end() || !isBorrowRootType(it->second.type)) {
         return false;
     }
 
@@ -737,43 +861,28 @@ bool OwnershipChecker::acquireBorrowToken(const BorrowToken& token, const AstNod
         return false;
     }
 
-    if (token.viewKind == "look") {
-        if (state.mutableBorrow) {
-            reportError(node, "Cannot create ref view while ref mut view is active -> " + token.rootName);
+    for (const auto& active : state.activeBorrows) {
+        if (borrowTokensConflict(active, token)) {
+            reportError(node, borrowConflictMessage(token, active));
             return false;
         }
-        ++state.sharedBorrows;
-        return true;
     }
 
-    if (token.viewKind == "edit") {
-        if (state.mutableBorrow || state.sharedBorrows > 0) {
-            reportError(node, "Cannot create ref mut view while another view is active -> " + token.rootName);
-            return false;
-        }
-        state.mutableBorrow = true;
-        return true;
-    }
-
-    return false;
+    state.activeBorrows.push_back(token);
+    return true;
 }
+
 
 void OwnershipChecker::releaseBorrowToken(const BorrowToken& token) {
     const auto it = varStates.find(token.rootName);
-    if (it == varStates.end() || !isTrackedOwned(it->second.type)) {
+    if (it == varStates.end() || !isBorrowRootType(it->second.type)) {
         return;
     }
 
-    auto& state = it->second;
-    if (token.viewKind == "look") {
-        if (state.sharedBorrows > 0) {
-            --state.sharedBorrows;
-        }
-        return;
-    }
-
-    if (token.viewKind == "edit") {
-        state.mutableBorrow = false;
+    auto& borrows = it->second.activeBorrows;
+    const auto match = std::find(borrows.rbegin(), borrows.rend(), token);
+    if (match != borrows.rend()) {
+        borrows.erase(std::prev(match.base()));
     }
 }
 
@@ -799,8 +908,11 @@ bool OwnershipChecker::shouldScheduleDrop(const TrackedVar& state) const {
 
 void OwnershipChecker::mergeTrackedState(TrackedVar& target, const TrackedVar& source) const {
     target.storageState = mergeStorageState(target.storageState, source.storageState);
-    target.sharedBorrows = std::max(target.sharedBorrows, source.sharedBorrows);
-    target.mutableBorrow = target.mutableBorrow || source.mutableBorrow;
+    for (const auto& borrow : source.activeBorrows) {
+        if (std::find(target.activeBorrows.begin(), target.activeBorrows.end(), borrow) == target.activeBorrows.end()) {
+            target.activeBorrows.push_back(borrow);
+        }
+    }
     if (target.storageState != StorageState::Initialized || target.lexicalBorrow != source.lexicalBorrow) {
         target.lexicalBorrow.reset();
     }
@@ -820,3 +932,4 @@ std::unordered_map<std::string, TrackedVar> OwnershipChecker::retainExistingStat
 }
 
 } // namespace claw::frontend
+

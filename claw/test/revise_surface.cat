@@ -16,7 +16,7 @@ fn echo(text: ref Str) -> ref Str {
 }
 
 fn sum(left: Int32, right: Int32) -> Int32 {
-    return left + right
+    left + right
 }
 
 fn main() {

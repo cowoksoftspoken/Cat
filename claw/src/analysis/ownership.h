@@ -21,6 +21,7 @@ struct BlockStmt;
 
 struct BorrowToken {
     std::string rootName;
+    std::vector<std::string> accessPath;
     std::string viewKind;
 
     bool operator==(const BorrowToken& other) const = default;
@@ -47,8 +48,7 @@ struct TrackedVar {
     ResolvedType type;
     bool isMutableStorage = false;
     StorageState storageState = StorageState::Initialized;
-    int sharedBorrows = 0;
-    bool mutableBorrow = false;
+    std::vector<BorrowToken> activeBorrows;
     std::optional<BorrowToken> lexicalBorrow;
 };
 
@@ -99,6 +99,7 @@ private:
     void releaseView(Expr* expr, const ResolvedType& viewType);
     const FunctionSignature* resolveCallSignature(const Expr* callee) const;
     std::optional<MethodSignature> resolveMethodSignature(const Expr* callee) const;
+    std::optional<BorrowToken> resolveBorrowPath(Expr* expr) const;
     std::optional<std::string> resolveBorrowRootName(Expr* expr) const;
     std::optional<BorrowToken> resolveBorrowToken(Expr* expr, const ResolvedType& viewType) const;
     bool acquireBorrowToken(const BorrowToken& token, const AstNode* node);

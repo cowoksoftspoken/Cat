@@ -950,7 +950,38 @@ OirFunction OirEmitter::lowerFn(const FnDecl* fn, std::string_view realmName) co
     const auto returnLayout = computeTypeLayout(returnType, sema.result(), sema.targetSpec());
     context.function.returnPassKind = returnLayout.has_value() ? returnLayout->passKind : AbiPassKind::Unknown;
 
-    lowerBlock(sema, ownership, fn ? fn->body.get() : nullptr, "entry", context, {}, *this);
+    const size_t entryBlockIndex = context.addBlock("entry");
+    std::optional<size_t> currentBlockIndex = entryBlockIndex;
+
+    if (fn && fn->body) {
+        const ExprStmt* implicitTailExpr = nullptr;
+        if (!fn->body->statements.empty()) {
+            implicitTailExpr = dynamic_cast<const ExprStmt*>(fn->body->statements.back().get());
+        }
+
+        for (const auto& stmt : fn->body->statements) {
+            if (!currentBlockIndex.has_value()) {
+                break;
+            }
+
+            if (implicitTailExpr && stmt.get() == implicitTailExpr) {
+                const OirValue value = implicitTailExpr->expr
+                    ? lowerExpr(sema, implicitTailExpr->expr.get(), context, *currentBlockIndex)
+                    : OirValue{"unit", "Unit", true};
+                appendDropInsts(context, *currentBlockIndex, dropsAtBlockEnd(ownership, fn->body.get()));
+                appendInst(context, *currentBlockIndex, OirReturnInst{value});
+                currentBlockIndex = std::nullopt;
+                break;
+            }
+
+            currentBlockIndex = lowerStmt(sema, ownership, stmt.get(), context, *currentBlockIndex, *this);
+        }
+
+        if (currentBlockIndex.has_value()) {
+            appendDropInsts(context, *currentBlockIndex, dropsAtBlockEnd(ownership, fn->body.get()));
+        }
+    }
+
     return std::move(context.function);
 }
 
