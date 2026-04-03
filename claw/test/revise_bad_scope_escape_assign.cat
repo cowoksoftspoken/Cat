@@ -1,0 +1,9 @@
+fn main() {
+    val source = "hello"
+    var saved: ref Str = ref source
+
+    scope s {
+        val scoped: ref[s] Str = ref[s] source
+        saved = scoped
+    }
+}

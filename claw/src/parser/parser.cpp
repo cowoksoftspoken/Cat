@@ -5,35 +5,6 @@
 
 namespace claw::frontend {
 
-namespace {
-
-std::string legacySyntaxMessage(TokenKind kind) {
-    switch (kind) {
-    case TokenKind::KwHold:
-        return "Legacy binding syntax 'hold' has been removed. Use 'val' for immutable bindings.";
-    case TokenKind::KwSlot:
-        return "Legacy binding syntax 'slot' has been removed. Use 'var' for mutable bindings.";
-    case TokenKind::KwGive:
-        return "Legacy return syntax 'give' has been removed. Use 'return'.";
-    case TokenKind::KwWhen:
-        return "Legacy conditional syntax 'when' has been removed. Use 'if'.";
-    case TokenKind::KwOtherwise:
-        return "Legacy branch syntax 'otherwise' has been removed. Use 'else'.";
-    case TokenKind::KwLook:
-        return "Legacy borrow syntax 'look' has been removed. Use 'ref'.";
-    case TokenKind::KwEdit:
-        return "Legacy borrow syntax 'edit' has been removed. Use 'ref mut'.";
-    case TokenKind::KwOf:
-        return "Legacy generic syntax 'of' has been removed. Use bracket generics like Vec[Int32].";
-    case TokenKind::KwRealm:
-        return "Legacy module syntax 'realm' has been removed. File path and workspace structure define the module name.";
-    default:
-        return "Legacy syntax has been removed from the revised surface.";
-    }
-}
-
-} // namespace
-
 Parser::Parser(std::vector<Token> tokens) : tokens(std::move(tokens)) {}
 
 const Token& Parser::peek() const {
@@ -97,23 +68,14 @@ bool Parser::isAtEnd() const {
     return peek().kind == TokenKind::Eof;
 }
 
-bool Parser::isLegacyTypeArgumentSeparator() const {
-    if (!check(TokenKind::Comma)) {
-        return false;
-    }
-
-    return !(checkAhead(1, TokenKind::Identifier) && checkAhead(2, TokenKind::Colon));
-}
-
 bool Parser::isNameToken(TokenKind kind) const {
     switch (kind) {
     case TokenKind::Identifier:
     case TokenKind::KwFail:
-    case TokenKind::KwLook:
-    case TokenKind::KwEdit:
+
     case TokenKind::KwRef:
     case TokenKind::KwMut:
-    case TokenKind::KwOf:
+
     case TokenKind::KwAs:
     case TokenKind::KwOver:
     case TokenKind::KwSuper:
@@ -141,10 +103,9 @@ bool Parser::isTopLevelRecoveryPoint(TokenKind kind) const {
 
 bool Parser::isStatementRecoveryPoint(TokenKind kind) const {
     return kind == TokenKind::KwVal || kind == TokenKind::KwVar ||
-           kind == TokenKind::KwHold || kind == TokenKind::KwSlot ||
-           kind == TokenKind::KwReturn || kind == TokenKind::KwGive ||
-           kind == TokenKind::KwIf || kind == TokenKind::KwWhen ||
-           kind == TokenKind::KwLoop || kind == TokenKind::KwScan || kind == TokenKind::KwPick ||
+           kind == TokenKind::KwReturn || kind == TokenKind::KwIf ||
+           kind == TokenKind::KwLoop || kind == TokenKind::KwScan || kind == TokenKind::KwScope ||
+           kind == TokenKind::KwPick ||
            kind == TokenKind::KwLift || kind == TokenKind::KwStop || kind == TokenKind::KwSkip ||
            kind == TokenKind::KwRaw || kind == TokenKind::RBrace || isTopLevelRecoveryPoint(kind);
 }
@@ -248,14 +209,6 @@ void Parser::parseTypeParameterList(std::vector<std::string>* out) {
             } while (match(TokenKind::Comma));
         }
         consume(TokenKind::RBracket, "Expected ']' after type parameters");
-        return;
-    }
-
-    if (match(TokenKind::KwOf)) {
-        do {
-            consumeNameToken("Expected type parameter");
-            out->push_back(previous().text);
-        } while (match(TokenKind::Comma));
     }
 }
 
@@ -275,9 +228,7 @@ std::unique_ptr<RealmDecl> Parser::parseFile() {
     auto realm = std::make_unique<RealmDecl>();
     realm->span = spanFromToken(peek());
 
-    if (match(TokenKind::KwRealm)) {
-        failAt(previous(), legacySyntaxMessage(TokenKind::KwRealm));
-    }
+
 
     while (!isAtEnd()) {
         try {
@@ -428,10 +379,14 @@ std::unique_ptr<TypeNode> Parser::parseType() {
         } else {
             type->viewKind = "look";
         }
-    } else if (match(TokenKind::KwLook)) {
-        failAt(previous(), legacySyntaxMessage(TokenKind::KwLook));
-    } else if (match(TokenKind::KwEdit)) {
-        failAt(previous(), legacySyntaxMessage(TokenKind::KwEdit));
+        if (match(TokenKind::LBracket)) {
+            if (type->viewKind == "edit") {
+                failAt(previous(), "`ref mut[s]` is not supported. Scope-bound borrows currently use `ref[s]`.");
+            }
+            consumeNameToken("Expected scope name inside ref[]");
+            type->viewScope = previous().text;
+            consume(TokenKind::RBracket, "Expected ']' after scope name");
+        }
     }
 
     consumeNameToken("Expected type name");
@@ -439,8 +394,6 @@ std::unique_ptr<TypeNode> Parser::parseType() {
 
     if (check(TokenKind::LBracket)) {
         type->params = parseBracketTypeArguments();
-    } else if (match(TokenKind::KwOf)) {
-        failAt(previous(), legacySyntaxMessage(TokenKind::KwOf));
     }
 
     return type;
@@ -467,15 +420,14 @@ std::unique_ptr<BlockStmt> Parser::parseBlock() {
 std::unique_ptr<Stmt> Parser::parseStatement() {
     if (match(TokenKind::KwVal)) return parseBinding(false);
     if (match(TokenKind::KwVar)) return parseBinding(true);
-    if (match(TokenKind::KwHold)) failAt(previous(), legacySyntaxMessage(TokenKind::KwHold));
-    if (match(TokenKind::KwSlot)) failAt(previous(), legacySyntaxMessage(TokenKind::KwSlot));
+
     if (match(TokenKind::KwReturn)) return parseGive();
-    if (match(TokenKind::KwGive)) failAt(previous(), legacySyntaxMessage(TokenKind::KwGive));
+
     if (match(TokenKind::KwIf)) return parseWhen();
-    if (match(TokenKind::KwWhen)) failAt(previous(), legacySyntaxMessage(TokenKind::KwWhen));
-    if (match(TokenKind::KwOtherwise)) failAt(previous(), legacySyntaxMessage(TokenKind::KwOtherwise));
+
     if (match(TokenKind::KwLoop)) return parseLoop();
     if (match(TokenKind::KwScan)) return parseScan();
+    if (match(TokenKind::KwScope)) return parseScope();
     if (match(TokenKind::KwPick)) return parsePick();
     if (match(TokenKind::KwLift)) return parseLift();
     if (match(TokenKind::KwStop)) {
@@ -574,9 +526,8 @@ std::unique_ptr<WhenStmt> Parser::parseWhen() {
 
     if (match(TokenKind::KwElse)) {
         stmt->elseBlock = parseBlock();
-    } else if (match(TokenKind::KwOtherwise)) {
-        failAt(previous(), legacySyntaxMessage(TokenKind::KwOtherwise));
     }
+
     return stmt;
 }
 
@@ -598,6 +549,15 @@ std::unique_ptr<ScanStmt> Parser::parseScan() {
     stmt->itemName = previous().text;
     consume(TokenKind::KwOver, "Expected 'over' after scan variable");
     stmt->iterable = parseExpression();
+    stmt->body = parseBlock();
+    return stmt;
+}
+
+std::unique_ptr<ScopeStmt> Parser::parseScope() {
+    auto stmt = std::make_unique<ScopeStmt>();
+    stmt->span = spanFromToken(previous());
+    consumeNameToken("Expected scope name after 'scope'");
+    stmt->name = previous().text;
     stmt->body = parseBlock();
     return stmt;
 }
@@ -691,6 +651,14 @@ std::unique_ptr<Expr> Parser::parseUnary() {
         if (match(TokenKind::KwMut)) {
             borrow->isMutable = true;
         }
+        if (match(TokenKind::LBracket)) {
+            if (borrow->isMutable) {
+                failAt(previous(), "`ref mut[s]` is not supported. Scope-bound borrows currently use `ref[s]`.");
+            }
+            consumeNameToken("Expected scope name inside ref[...]");
+            borrow->scopeName = previous().text;
+            consume(TokenKind::RBracket, "Expected ']' after scope name");
+        }
         borrow->target = parseUnary();
         return borrow;
     }
@@ -742,7 +710,7 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
 
 std::unique_ptr<Expr> Parser::parsePrimary() {
     if (check(TokenKind::Error)) {
-        failAtCurrent("Unexpected character in source.");
+        failAtCurrent("Unexpected token in source.");
     }
 
     if (match(TokenKind::KwTrue)) {

@@ -21,7 +21,8 @@ ARTIFACT_DIR="$ROOT_DIR/test_backend/artifacts"
 mkdir -p "$ARTIFACT_DIR"
 result_ll="$ARTIFACT_DIR/revise_result_llvm.ll"
 maybe_ll="$ARTIFACT_DIR/revise_maybe.ll"
-rm -f "$result_ll" "$maybe_ll"
+scope_ll="$ARTIFACT_DIR/revise_scope_refs.ll"
+rm -f "$result_ll" "$maybe_ll" "$scope_ll"
 
 echo "[llvm/pass] test_backend/revise_result_llvm.cat"
 "$CLAW_EXE" llvm "$ROOT_DIR/test_backend/revise_result_llvm.cat" > "$result_ll"
@@ -39,3 +40,14 @@ llvm-as "$result_ll" -o /dev/null
 echo "[llvm/pass] test/revise_maybe.cat"
 "$CLAW_EXE" llvm "$ROOT_DIR/test/revise_maybe.cat" > "$maybe_ll"
 llvm-as "$maybe_ll" -o /dev/null
+
+echo "[llvm/pass] test_backend/revise_scope_refs.cat"
+"$CLAW_EXE" llvm "$ROOT_DIR/test_backend/revise_scope_refs.cat" > "$scope_ll"
+scope_output="$(tr -d '\r' < "$scope_ll")"
+if [[ "$scope_output" != *'define internal void @"revise_scope_refs::main"'* ]] ||
+   [[ "$scope_output" != *'@"claw.runtime.println.slice"'* ]] ||
+   [[ "$scope_output" != *'scope_s_0:'* ]]; then
+  echo "revised scope-ref LLVM output did not include the expected lowering markers" >&2
+  exit 1
+fi
+llvm-as "$scope_ll" -o /dev/null

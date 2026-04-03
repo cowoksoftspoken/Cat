@@ -198,6 +198,263 @@ bool isRootMainEntryUnit(
         unit.path.parent_path().lexically_normal() == project.packageRoot.lexically_normal();
 }
 
+const claw::frontend::FnDecl* findDeclaredMain(const claw::frontend::RealmDecl* realm) {
+    if (!realm) {
+        return nullptr;
+    }
+
+    for (const auto& decl : realm->declarations) {
+        if (auto* fn = dynamic_cast<const claw::frontend::FnDecl*>(decl.get())) {
+            if (fn->name == "main") {
+                return fn;
+            }
+        }
+    }
+
+    return nullptr;
+}
+
+size_t countDeclaredMains(const claw::frontend::RealmDecl* realm) {
+    if (!realm) {
+        return 0;
+    }
+
+    size_t count = 0;
+    for (const auto& decl : realm->declarations) {
+        if (auto* fn = dynamic_cast<const claw::frontend::FnDecl*>(decl.get())) {
+            if (fn->name == "main") {
+                ++count;
+            }
+        }
+    }
+
+    return count;
+}
+
+bool containsMainCallExpr(const claw::frontend::Expr* expr) {
+    if (!expr) {
+        return false;
+    }
+
+    if (auto* call = dynamic_cast<const claw::frontend::CallExpr*>(expr)) {
+        if (auto* ident = dynamic_cast<const claw::frontend::IdentExpr*>(call->callee.get())) {
+            if (ident->name == "main") {
+                return true;
+            }
+        }
+
+        if (containsMainCallExpr(call->callee.get())) {
+            return true;
+        }
+        for (const auto& arg : call->args) {
+            if (containsMainCallExpr(arg.get())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if (auto* binary = dynamic_cast<const claw::frontend::BinaryExpr*>(expr)) {
+        return containsMainCallExpr(binary->left.get()) || containsMainCallExpr(binary->right.get());
+    }
+    if (auto* member = dynamic_cast<const claw::frontend::MemberExpr*>(expr)) {
+        return containsMainCallExpr(member->object.get());
+    }
+    if (auto* index = dynamic_cast<const claw::frontend::IndexExpr*>(expr)) {
+        return containsMainCallExpr(index->object.get()) || containsMainCallExpr(index->index.get());
+    }
+    if (auto* borrow = dynamic_cast<const claw::frontend::BorrowExpr*>(expr)) {
+        return containsMainCallExpr(borrow->target.get());
+    }
+
+    return false;
+}
+
+const claw::frontend::AstNode* findMainCallNode(const claw::frontend::Stmt* stmt) {
+    if (!stmt) {
+        return nullptr;
+    }
+
+    if (auto* exprStmt = dynamic_cast<const claw::frontend::ExprStmt*>(stmt)) {
+        return containsMainCallExpr(exprStmt->expr.get()) ? exprStmt->expr.get() : nullptr;
+    }
+    if (auto* give = dynamic_cast<const claw::frontend::GiveStmt*>(stmt)) {
+        return containsMainCallExpr(give->value.get()) ? give->value.get() : nullptr;
+    }
+    if (auto* assign = dynamic_cast<const claw::frontend::AssignStmt*>(stmt)) {
+        if (containsMainCallExpr(assign->target.get())) {
+            return assign->target.get();
+        }
+        return containsMainCallExpr(assign->value.get()) ? assign->value.get() : nullptr;
+    }
+    if (auto* bind = dynamic_cast<const claw::frontend::BindingStmt*>(stmt)) {
+        return containsMainCallExpr(bind->value.get()) ? bind->value.get() : nullptr;
+    }
+    if (auto* tryStmt = dynamic_cast<const claw::frontend::TryStmt*>(stmt)) {
+        if (containsMainCallExpr(tryStmt->expr.get())) {
+            return tryStmt->expr.get();
+        }
+        if (tryStmt->failBlock) {
+            for (const auto& nested : tryStmt->failBlock->statements) {
+                if (const auto* found = findMainCallNode(nested.get())) {
+                    return found;
+                }
+            }
+        }
+        return nullptr;
+    }
+    if (auto* when = dynamic_cast<const claw::frontend::WhenStmt*>(stmt)) {
+        if (containsMainCallExpr(when->condition.get())) {
+            return when->condition.get();
+        }
+        for (const auto& nested : when->thenBlock->statements) {
+            if (const auto* found = findMainCallNode(nested.get())) {
+                return found;
+            }
+        }
+        if (when->elseBlock) {
+            for (const auto& nested : when->elseBlock->statements) {
+                if (const auto* found = findMainCallNode(nested.get())) {
+                    return found;
+                }
+            }
+        }
+        return nullptr;
+    }
+    if (auto* loop = dynamic_cast<const claw::frontend::LoopStmt*>(stmt)) {
+        if (containsMainCallExpr(loop->condition.get())) {
+            return loop->condition.get();
+        }
+        for (const auto& nested : loop->body->statements) {
+            if (const auto* found = findMainCallNode(nested.get())) {
+                return found;
+            }
+        }
+        return nullptr;
+    }
+    if (auto* scan = dynamic_cast<const claw::frontend::ScanStmt*>(stmt)) {
+        if (containsMainCallExpr(scan->iterable.get())) {
+            return scan->iterable.get();
+        }
+        for (const auto& nested : scan->body->statements) {
+            if (const auto* found = findMainCallNode(nested.get())) {
+                return found;
+            }
+        }
+        return nullptr;
+    }
+    if (auto* pick = dynamic_cast<const claw::frontend::PickStmt*>(stmt)) {
+        if (containsMainCallExpr(pick->value.get())) {
+            return pick->value.get();
+        }
+        for (const auto& branch : pick->branches) {
+            for (const auto& nested : branch.body->statements) {
+                if (const auto* found = findMainCallNode(nested.get())) {
+                    return found;
+                }
+            }
+        }
+        return nullptr;
+    }
+    if (auto* lift = dynamic_cast<const claw::frontend::LiftStmt*>(stmt)) {
+        if (containsMainCallExpr(lift->expr.get())) {
+            return lift->expr.get();
+        }
+        for (const auto& nested : lift->failBlock->statements) {
+            if (const auto* found = findMainCallNode(nested.get())) {
+                return found;
+            }
+        }
+        return nullptr;
+    }
+    if (auto* raw = dynamic_cast<const claw::frontend::RawStmt*>(stmt)) {
+        for (const auto& nested : raw->body->statements) {
+            if (const auto* found = findMainCallNode(nested.get())) {
+                return found;
+            }
+        }
+        return nullptr;
+    }
+
+    return nullptr;
+}
+
+void validateMainDeclarations(const claw::frontend::LoadedProject& project) {
+    std::vector<claw::frontend::Diagnostic> diagnostics;
+
+    for (size_t i = 0; i < project.units.size(); ++i) {
+        const auto& unit = project.units[i];
+        if (!unit.ast) {
+            continue;
+        }
+
+        const size_t mainCount = countDeclaredMains(unit.ast.get());
+        if (mainCount == 0) {
+            continue;
+        }
+
+        const auto* firstMain = findDeclaredMain(unit.ast.get());
+        const bool isEntryUnit = i == project.entryIndex;
+        const bool isWorkspaceEntry = isRootMainEntryUnit(project, unit);
+
+        if (!isEntryUnit || (project.structuredPackage && !isWorkspaceEntry)) {
+            claw::frontend::Diagnostic diagnostic;
+            diagnostic.stage = "entry";
+            diagnostic.message = "`fn main` is only allowed in root main.cat.";
+            diagnostic.span = firstMain ? firstMain->span : unit.ast->span;
+            diagnostic.path = unit.path.string();
+            diagnostics.push_back(std::move(diagnostic));
+            continue;
+        }
+
+        if (mainCount > 1) {
+            claw::frontend::Diagnostic diagnostic;
+            diagnostic.stage = "entry";
+            diagnostic.message = "main.cat must contain exactly one `fn main` declaration.";
+            diagnostic.span = firstMain ? firstMain->span : unit.ast->span;
+            diagnostic.path = unit.path.string();
+            diagnostics.push_back(std::move(diagnostic));
+        }
+    }
+
+    if (!diagnostics.empty()) {
+        throw claw::frontend::DiagnosticError("Entry point validation failed.", std::move(diagnostics));
+    }
+}
+
+void validateMainCalls(const claw::frontend::LoadedProject& project) {
+    std::vector<claw::frontend::Diagnostic> diagnostics;
+
+    for (const auto& unit : project.units) {
+        if (!unit.ast) {
+            continue;
+        }
+
+        for (const auto& decl : unit.ast->declarations) {
+            auto* fn = dynamic_cast<const claw::frontend::FnDecl*>(decl.get());
+            if (!fn || !fn->body) {
+                continue;
+            }
+
+            for (const auto& stmt : fn->body->statements) {
+                if (const auto* found = findMainCallNode(stmt.get())) {
+                    claw::frontend::Diagnostic diagnostic;
+                    diagnostic.stage = "entry";
+                    diagnostic.message = "`main` is the program entry point and cannot be called like a normal function.";
+                    diagnostic.span = found->span;
+                    diagnostic.path = unit.path.string();
+                    diagnostics.push_back(std::move(diagnostic));
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!diagnostics.empty()) {
+        throw claw::frontend::DiagnosticError("Entry point validation failed.", std::move(diagnostics));
+    }
+}
+
 std::vector<claw::frontend::Diagnostic> collectProjectWarnings(
     const claw::frontend::LoadedProject& project) {
     std::vector<claw::frontend::Diagnostic> warnings;
@@ -381,6 +638,8 @@ int main(int argc, char** argv) {
             std::cerr << formatDiagnosticsWithSources(warnings, diagnosticPath, source) << "\n";
         }
         neutralizeRootEntrySharedDecls(project);
+        validateMainDeclarations(project);
+        validateMainCalls(project);
 
         std::vector<std::unique_ptr<claw::frontend::SemanticAnalyzer>> analyzers;
         analyzers.reserve(project.units.size());

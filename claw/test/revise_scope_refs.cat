@@ -1,0 +1,20 @@
+fn identity(input: ref Str) -> ref Str {
+    return input
+}
+
+fn inspect(left: ref Str, right: ref Str) {
+    println(left)
+    println(right)
+}
+
+fn main() {
+    val first = "alpha"
+    val second = "beta"
+
+    scope s {
+        val a: ref[s] Str = ref[s] first
+        val b: ref[s] Str = ref[s] second
+        val again: ref[s] Str = identity(a)
+        inspect(again, b)
+    }
+}

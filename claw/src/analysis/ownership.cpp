@@ -408,6 +408,15 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
         return;
     }
 
+    if (auto* scoped = dynamic_cast<ScopeStmt*>(stmt)) {
+        enterScope(scoped->body.get(), ScopeKind::Normal);
+        for (auto& stmtInBlock : scoped->body->statements) {
+            checkStmt(stmtInBlock.get());
+        }
+        exitScope();
+        return;
+    }
+
     if (auto* pick = dynamic_cast<PickStmt*>(stmt)) {
         checkExpr(pick->value.get(), false);
 

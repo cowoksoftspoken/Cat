@@ -7,12 +7,12 @@ namespace claw::frontend {
 
 enum class TokenKind {
     // Keywords
-    KwFn, KwVal, KwVar, KwHold, KwSlot, KwReturn, KwGive, KwIf, KwElse, KwWhen, KwOtherwise,
-    KwLoop, KwScan, KwStop, KwSkip, KwShape, KwChoice,
+    KwFn, KwVal, KwVar, KwReturn, KwIf, KwElse,
+    KwLoop, KwScan, KwStop, KwSkip, KwScope, KwShape, KwChoice,
     KwImport, KwShare, KwSuper, KwPub, KwModules,
-    KwAs, KwOver, KwOf, KwFail, KwPick, KwLift, KwRaw,
-    KwRef, KwMut, KwLook, KwEdit, KwTry, KwForeign, KwStatic,
-    KwContract, KwImplements, KwWith, KwSelf, KwTrue, KwFalse, KwRealm,
+    KwAs, KwOver, KwFail, KwPick, KwLift, KwRaw,
+    KwRef, KwMut, KwTry, KwForeign, KwStatic,
+    KwContract, KwImplements, KwWith, KwSelf, KwTrue, KwFalse,
 
     // Punctuation
     LBracket, RBracket,

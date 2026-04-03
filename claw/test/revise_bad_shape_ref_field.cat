@@ -1,0 +1,7 @@
+shape Cache {
+    stored: ref Str
+}
+
+fn main() {
+    println("ok")
+}

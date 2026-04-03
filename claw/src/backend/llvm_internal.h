@@ -38,6 +38,18 @@ inline std::string trim(std::string_view text) {
 
 inline std::string stripViewPrefix(std::string_view type) {
     const std::string trimmed = trim(type);
+    if (trimmed.rfind("ref[", 0) == 0) {
+        const size_t close = trimmed.find(']');
+        if (close != std::string::npos) {
+            return trim(std::string_view(trimmed).substr(close + 1));
+        }
+    }
+    if (trimmed.rfind("ref mut[", 0) == 0) {
+        const size_t close = trimmed.find(']');
+        if (close != std::string::npos) {
+            return trim(std::string_view(trimmed).substr(close + 1));
+        }
+    }
     if (trimmed.rfind("ref mut ", 0) == 0) {
         return trim(std::string_view(trimmed).substr(8));
     }
@@ -274,11 +286,21 @@ inline std::string joinTypeArgs(const std::vector<std::string>& args) {
 inline std::string substituteTypeText(
     std::string_view typeText,
     const std::unordered_map<std::string, std::string>& bindings) {
-    const std::string prefix =
-        typeText.rfind("ref mut ", 0) == 0 ? std::string("ref mut ") :
-        (typeText.rfind("ref ", 0) == 0 ? std::string("ref ") :
-        (typeText.rfind("look ", 0) == 0 ? std::string("look ") :
-        (typeText.rfind("edit ", 0) == 0 ? std::string("edit ") : std::string{})));
+    const std::string trimmed = trim(typeText);
+    std::string prefix;
+    if (trimmed.rfind("ref mut[", 0) == 0) {
+        const size_t close = trimmed.find(']');
+        prefix = close != std::string::npos ? trimmed.substr(0, close + 1) + " " : std::string("ref mut ");
+    } else if (trimmed.rfind("ref[", 0) == 0) {
+        const size_t close = trimmed.find(']');
+        prefix = close != std::string::npos ? trimmed.substr(0, close + 1) + " " : std::string("ref ");
+    } else {
+        prefix =
+            trimmed.rfind("ref mut ", 0) == 0 ? std::string("ref mut ") :
+            (trimmed.rfind("ref ", 0) == 0 ? std::string("ref ") :
+            (trimmed.rfind("look ", 0) == 0 ? std::string("look ") :
+            (trimmed.rfind("edit ", 0) == 0 ? std::string("edit ") : std::string{})));
+    }
     const ParsedTypeName parsed = parseTypeName(typeText);
     if (parsed.args.empty()) {
         const auto it = bindings.find(parsed.base);

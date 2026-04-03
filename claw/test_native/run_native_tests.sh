@@ -43,10 +43,12 @@ single_output="$ARTIFACT_DIR/revise_single_file.exe"
 workspace_output="$ARTIFACT_DIR/revise_workspace.exe"
 maybe_output="$ARTIFACT_DIR/revise_maybe.exe"
 exit_code_output="$ARTIFACT_DIR/revise_exit_code.exe"
+scope_output="$ARTIFACT_DIR/revise_scope_refs.exe"
 rm -f "$single_output" "${single_output%.exe}.ll" \
       "$workspace_output" "${workspace_output%.exe}.ll" \
       "$maybe_output" "${maybe_output%.exe}.ll" \
-      "$exit_code_output" "${exit_code_output%.exe}.ll"
+      "$exit_code_output" "${exit_code_output%.exe}.ll" \
+      "$scope_output" "${scope_output%.exe}.ll"
 
 echo "[build/pass] test_native/revise_single_file.cat"
 "$CLAW_EXE" build "$ROOT_DIR/test_native/revise_single_file.cat" "$single_output" >/dev/null
@@ -90,5 +92,15 @@ exit_status=$?
 set -e
 if [[ "$exit_status" -ne 7 ]]; then
   echo "revised Int32 main exit code was $exit_status, expected 7" >&2
+  exit 1
+fi
+
+echo "[build/pass] test_native/revise_scope_refs.cat"
+"$CLAW_EXE" build "$ROOT_DIR/test_native/revise_scope_refs.cat" "$scope_output" >/dev/null
+expect_generated_ll "$scope_output"
+
+scope_stdout="$(normalize_stdout "$scope_output")"
+if [[ "$scope_stdout" != "scope" ]]; then
+  echo "revised scope-ref native build produced unexpected output: $scope_stdout" >&2
   exit 1
 fi

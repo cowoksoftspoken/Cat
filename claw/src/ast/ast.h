@@ -17,6 +17,7 @@ struct AstNode {
 struct TypeNode : public AstNode {
     std::string name;
     std::string viewKind;
+    std::string viewScope;
     std::vector<std::unique_ptr<TypeNode>> params;
 };
 
@@ -70,6 +71,7 @@ struct IndexExpr : public Expr {
 
 struct BorrowExpr : public Expr {
     bool isMutable = false;
+    std::string scopeName;
     std::unique_ptr<Expr> target;
 };
 
@@ -123,6 +125,11 @@ struct LoopStmt : public Stmt {
 struct ScanStmt : public Stmt {
     std::string itemName;
     std::unique_ptr<Expr> iterable;
+    std::unique_ptr<BlockStmt> body;
+};
+
+struct ScopeStmt : public Stmt {
+    std::string name;
     std::unique_ptr<BlockStmt> body;
 };
 

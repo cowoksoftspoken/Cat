@@ -384,6 +384,11 @@ OirValue lowerExpr(
         appendInst(context, blockIndex, OirFieldInst{result, object, member->member, type});
         return OirValue{result, type, false};
     }
+    if (auto* borrow = dynamic_cast<const BorrowExpr*>(expr)) {
+        OirValue lowered = lowerExpr(sema, borrow->target.get(), context, blockIndex);
+        lowered.type = exprType(sema, expr);
+        return lowered;
+    }
     if (auto* binary = dynamic_cast<const BinaryExpr*>(expr)) {
         const OirValue left = lowerExpr(sema, binary->left.get(), context, blockIndex);
         const OirValue right = lowerExpr(sema, binary->right.get(), context, blockIndex);
@@ -543,6 +548,14 @@ std::optional<size_t> lowerStmt(
         lowerBlock(sema, ownership, scan->body.get(), bodyLabel, context, headerLabel, emitter);
         context.loopStack.pop_back();
         return context.addBlock(exitLabel);
+    }
+
+    if (auto* scopeStmt = dynamic_cast<const ScopeStmt*>(stmt)) {
+        const std::string scopeLabel = context.blockName("scope_" + scopeStmt->name);
+        const std::string contLabel = context.blockName("scope_cont");
+        appendInst(context, currentBlockIndex, OirGotoInst{scopeLabel});
+        lowerBlock(sema, ownership, scopeStmt->body.get(), scopeLabel, context, contLabel, emitter);
+        return context.addBlock(contLabel);
     }
 
     if (auto* pick = dynamic_cast<const PickStmt*>(stmt)) {
@@ -885,6 +898,10 @@ bool stmtDefinitelyTerminatesImpl(const OirEmitter& emitter, const Stmt* stmt) {
 
     if (auto* raw = dynamic_cast<const RawStmt*>(stmt)) {
         return emitter.blockDefinitelyTerminates(raw->body.get());
+    }
+
+    if (auto* scopeStmt = dynamic_cast<const ScopeStmt*>(stmt)) {
+        return emitter.blockDefinitelyTerminates(scopeStmt->body.get());
     }
 
     return false;

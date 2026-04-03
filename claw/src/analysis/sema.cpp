@@ -351,6 +351,7 @@ struct BuiltinMethodSpec {
 ResolvedType asViewType(const ResolvedType& base, const std::string& viewKind) {
     ResolvedType adapted = base;
     adapted.viewKind = viewKind;
+    adapted.viewScope = base.viewScope;
     adapted.category = viewKind.empty() ? base.category : TypeCategory::View;
     return adapted;
 }
@@ -568,6 +569,164 @@ void SemanticAnalyzer::reportError(const AstNode* node, const std::string& msg) 
     reportError(node ? node->span : SourceSpan{}, msg);
 }
 
+void SemanticAnalyzer::enterSemanticScope() {
+    scopes.enterScope();
+    ++lexicalScopeDepth;
+}
+
+void SemanticAnalyzer::exitSemanticScope() {
+    if (lexicalScopeDepth > 0) {
+        --lexicalScopeDepth;
+    }
+    scopes.exitScope();
+}
+
+bool SemanticAnalyzer::enterNamedBorrowScope(const std::string& name, const SourceSpan& span) {
+    if (lookupNamedBorrowScope(name)) {
+        reportError(span, "Borrow scope '" + name + "' is already active. Choose a different scope name.");
+        return false;
+    }
+
+    namedBorrowScopes.push_back(NamedBorrowScope{name, span, lexicalScopeDepth});
+    return true;
+}
+
+void SemanticAnalyzer::exitNamedBorrowScope() {
+    if (!namedBorrowScopes.empty()) {
+        namedBorrowScopes.pop_back();
+    }
+}
+
+const NamedBorrowScope* SemanticAnalyzer::lookupNamedBorrowScope(const std::string& name) const {
+    for (auto it = namedBorrowScopes.rbegin(); it != namedBorrowScopes.rend(); ++it) {
+        if (it->name == name) {
+            return &*it;
+        }
+    }
+    return nullptr;
+}
+
+bool SemanticAnalyzer::validateScopedViewType(const ResolvedType& type, const AstNode* node, std::string_view context) {
+    if (!type.isView() || type.viewScope.empty()) {
+        return true;
+    }
+
+    if (type.viewKind != "look") {
+        reportError(node, "Scoped borrows currently use `ref[s]`, not `" + type.describe() + "`.");
+        return false;
+    }
+
+    if (!lookupNamedBorrowScope(type.viewScope)) {
+        reportError(
+            node,
+            "Scoped borrow `" + type.describe() + "` is only valid inside `scope " + type.viewScope +
+                " { ... }` for " + std::string(context) + ".");
+        return false;
+    }
+
+    return true;
+}
+
+const Symbol* SemanticAnalyzer::resolveBorrowSourceSymbol(const Expr* expr) const {
+    if (!expr) {
+        return nullptr;
+    }
+
+    if (auto* ident = dynamic_cast<const IdentExpr*>(expr)) {
+        const auto sym = lookupSymbol(ident->name);
+        return sym && sym->kind == SymbolKind::Variable ? sym.get() : nullptr;
+    }
+
+    if (auto* member = dynamic_cast<const MemberExpr*>(expr)) {
+        return resolveBorrowSourceSymbol(member->object.get());
+    }
+
+    if (auto* index = dynamic_cast<const IndexExpr*>(expr)) {
+        return resolveBorrowSourceSymbol(index->object.get());
+    }
+
+    if (auto* borrow = dynamic_cast<const BorrowExpr*>(expr)) {
+        return resolveBorrowSourceSymbol(borrow->target.get());
+    }
+
+    if (auto* call = dynamic_cast<const CallExpr*>(expr)) {
+        const FunctionSignature* signature = lookupCallableSignature(call->callee.get());
+        auto methodSignature = lookupMethodSignature(call->callee.get());
+
+        if (methodSignature.has_value()) {
+            if (methodSignature->viewReturnFromReceiver) {
+                if (auto* member = dynamic_cast<const MemberExpr*>(call->callee.get())) {
+                    return resolveBorrowSourceSymbol(member->object.get());
+                }
+                return nullptr;
+            }
+            if (methodSignature->viewReturnSourceArg.has_value()) {
+                const size_t sourceIndex = *methodSignature->viewReturnSourceArg;
+                if (sourceIndex < call->args.size()) {
+                    return resolveBorrowSourceSymbol(call->args[sourceIndex].get());
+                }
+                return nullptr;
+            }
+        }
+
+        if (signature && signature->returnType.isView() && signature->viewReturnSourceParam.has_value()) {
+            const size_t sourceIndex = *signature->viewReturnSourceParam;
+            if (sourceIndex < call->args.size()) {
+                return resolveBorrowSourceSymbol(call->args[sourceIndex].get());
+            }
+        }
+    }
+
+    return nullptr;
+}
+
+bool SemanticAnalyzer::validateScopedBorrowSource(
+    const Expr* expr,
+    const ResolvedType& targetType,
+    const AstNode* node,
+    std::string_view context) {
+    if (!targetType.isView() || targetType.viewScope.empty()) {
+        return true;
+    }
+
+    const auto* namedScope = lookupNamedBorrowScope(targetType.viewScope);
+    if (!namedScope) {
+        reportError(
+            node,
+            "Scoped borrow `" + targetType.describe() + "` is only valid inside `scope " + targetType.viewScope +
+                " { ... }` for " + std::string(context) + ".");
+        return false;
+    }
+
+    const auto* sourceSymbol = resolveBorrowSourceSymbol(expr);
+    if (!sourceSymbol) {
+        reportError(
+            node,
+            "Scoped borrow `" + targetType.describe() +
+                "` must come from a named value that lives for the whole scope. Borrow a stable binding instead.");
+        return false;
+    }
+
+    if (sourceSymbol->lexicalDepth > namedScope->lexicalDepth) {
+        reportError(
+            node,
+            "Source value for `" + targetType.describe() + "` does not live long enough for scope `" +
+                targetType.viewScope + "`. Move the source binding outside the inner block or keep the ref in a shorter scope.");
+        return false;
+    }
+
+    if (sourceSymbol->type.isView() && !sourceSymbol->type.viewScope.empty() &&
+        sourceSymbol->type.viewScope != targetType.viewScope) {
+        reportError(
+            node,
+            "Cannot rebind `" + sourceSymbol->type.describe() + "` into `" + targetType.describe() +
+                "`. Scoped refs must stay in the same named scope.");
+        return false;
+    }
+
+    return true;
+}
+
 void SemanticAnalyzer::registerPrelude() {
     auto registerBuiltin = [&](const std::string& name) {
         FunctionSignature signature;
@@ -600,8 +759,10 @@ void SemanticAnalyzer::analyze(RealmDecl* realm) {
     currentViewReturnSeen = false;
     loopDepth = 0;
     rawDepth = 0;
+    lexicalScopeDepth = 0;
+    namedBorrowScopes.clear();
 
-    scopes.enterScope();
+    enterSemanticScope();
     registerPrelude();
     registerImports(realm);
     declareTopLevel(realm);
@@ -612,7 +773,7 @@ void SemanticAnalyzer::analyze(RealmDecl* realm) {
         analyzeDecl(decl.get());
     }
 
-    scopes.exitScope();
+    exitSemanticScope();
 
     if (!diagnostics.empty()) {
         throw DiagnosticError(
@@ -962,6 +1123,17 @@ std::optional<MethodSignature> SemanticAnalyzer::lookupMethodSignature(
         return signature;
     }
 
+    if (methodName == "get" && receiverType.name == "Anchor" && receiverType.params.size() == 1) {
+        MethodSignature signature;
+        signature.name = methodName;
+        signature.receiverType = asViewType(receiverType, "look");
+        signature.function.returnType = asViewType(receiverType.params.front(), "look");
+        signature.function.isExternal = true;
+        signature.viewReturnFromReceiver = true;
+        signature.isBuiltin = true;
+        return signature;
+    }
+
     for (const auto& spec : builtinMethodSpecs()) {
         if (spec.receiverName != receiverType.name || spec.methodName != methodName) {
             continue;
@@ -989,7 +1161,7 @@ void SemanticAnalyzer::analyzeDecl(Decl* decl) {
 }
 
 void SemanticAnalyzer::analyzeFnDecl(FnDecl* fn) {
-    scopes.enterScope();
+    enterSemanticScope();
 
     const FnDecl* previousFunction = currentFunction;
     const FunctionSignature* previousSignature = currentSignature;
@@ -1006,9 +1178,18 @@ void SemanticAnalyzer::analyzeFnDecl(FnDecl* fn) {
         if (currentSignature->returnType.viewKind == "edit") {
             reportError(fn, "Safe functions cannot return ref mut views. Return an owned value or a ref view derived from a parameter.");
         }
+        if (!currentSignature->returnType.viewScope.empty()) {
+            reportError(fn, "Function signatures cannot use scoped refs like `" + currentSignature->returnType.describe() + "`. Keep scoped refs inside `scope ... {}` blocks.");
+        }
         for (size_t i = 0; i < fn->params.size() && i < currentSignature->paramTypes.size(); ++i) {
             if (isRawAddressType(currentSignature->paramTypes[i])) {
                 reportError(fn->params[i].span, "Raw address types are not allowed in safe function parameters.");
+            }
+            if (!currentSignature->paramTypes[i].viewScope.empty()) {
+                reportError(
+                    fn->params[i].span,
+                    "Function parameters cannot use scoped refs like `" + currentSignature->paramTypes[i].describe() +
+                        "`. Keep scoped refs inside `scope ... {}` blocks.");
             }
         }
         if (isRawAddressType(currentSignature->returnType)) {
@@ -1042,6 +1223,11 @@ void SemanticAnalyzer::analyzeFnDecl(FnDecl* fn) {
 
                 if (valueType.isOpaqueExternal()) {
                     reportError(tailExprStmt->expr.get(), opaqueExternalValueUseMessage(valueType, "implicit return value"));
+                } else if (!valueType.viewScope.empty()) {
+                    reportError(
+                        tailExprStmt,
+                        "Scoped ref `" + valueType.describe() + "` cannot leave `scope " + valueType.viewScope +
+                            "`. Return an owned value instead or keep the borrow inside that scope.");
                 } else if (currentSignature && currentSignature->returnType.isView()) {
                     if (!canBorrowAsView(valueType, currentSignature->returnType)) {
                         reportError(
@@ -1053,7 +1239,7 @@ void SemanticAnalyzer::analyzeFnDecl(FnDecl* fn) {
                     if (!sourceParamIndex.has_value()) {
                         reportError(
                             tailExprStmt,
-                            "Returned ref value must come from one of the function's ref parameters. It cannot point into a local value or temporary.");
+                            "Returned ref value must come from one of the function's ref parameters. Return an owned value instead, use Anchor[T] for stable storage, or keep the borrow inside a scope block.");
                     } else if (!currentViewReturnSeen) {
                         currentViewReturnSourceParam = sourceParamIndex;
                         currentViewReturnSeen = true;
@@ -1099,7 +1285,7 @@ void SemanticAnalyzer::analyzeFnDecl(FnDecl* fn) {
     currentViewReturnSourceParam = previousViewReturnSourceParam;
     currentViewReturnSeen = previousViewReturnSeen;
     rawDepth = previousRawDepth;
-    scopes.exitScope();
+    exitSemanticScope();
 }
 
 void SemanticAnalyzer::analyzeShapeDecl(ShapeDecl* shape) {
@@ -1116,6 +1302,18 @@ void SemanticAnalyzer::analyzeShapeDecl(ShapeDecl* shape) {
         }
 
         ResolvedType type = resolveTypeNode(field.type.get(), localTypeParams);
+        if (!validateScopedViewType(type, field.type.get(), "shape fields")) {
+            info.fields[field.name] = type;
+            info.fieldOrder.push_back(field.name);
+            continue;
+        }
+        if (type.isView() && type.viewScope.empty()) {
+            reportError(
+                field.span,
+                "Shape '" + shape->name + "' cannot store " + type.describe() +
+                    " directly in field '" + field.name +
+                    "'. Store an owned value, use Anchor[T] for stable storage, or keep the borrow inside a scope block.");
+        }
         info.fields[field.name] = type;
         info.fieldOrder.push_back(field.name);
     }
@@ -1142,7 +1340,19 @@ void SemanticAnalyzer::analyzeChoiceDecl(ChoiceDecl* choice) {
 
         ChoiceVariantInfo variantInfo;
         for (const auto& payload : variant.payloads) {
-            variantInfo.payloadTypes.push_back(resolveTypeNode(payload.type.get(), localTypeParams));
+            ResolvedType payloadType = resolveTypeNode(payload.type.get(), localTypeParams);
+            if (!validateScopedViewType(payloadType, payload.type.get(), "choice payloads")) {
+                variantInfo.payloadTypes.push_back(std::move(payloadType));
+                continue;
+            }
+            if (payloadType.isView() && payloadType.viewScope.empty()) {
+                reportError(
+                    payload.span,
+                    "Choice '" + choice->name + "' cannot store `" + payloadType.describe() +
+                        "` directly in variant '" + variant.tag +
+                        "'. Store an owned value, use Anchor[T] for stable storage, or keep the borrow inside a scope block.");
+            }
+            variantInfo.payloadTypes.push_back(std::move(payloadType));
         }
 
         info.variants[variant.tag] = std::move(variantInfo);
@@ -1205,6 +1415,17 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
 
         if (rawDepth == 0 && isRawAddressType(finalType)) {
             reportError(bind, "Raw address values may only appear inside raw blocks.");
+        }
+        validateScopedViewType(finalType, bind, "bindings");
+        if (bind->value && finalType.isView() && !finalType.viewScope.empty()) {
+            validateScopedBorrowSource(bind->value.get(), finalType, bind, "binding initializer");
+        }
+        if (bind->value && valueType.isView() && !valueType.viewScope.empty() &&
+            (!finalType.isView() || finalType.viewScope.empty())) {
+            reportError(
+                bind,
+                "Scoped ref `" + valueType.describe() + "` cannot escape into binding '" + bind->name +
+                    "'. Keep it inside `scope " + valueType.viewScope + "` or store an owned value instead.");
         }
 
         const std::optional<size_t> viewSourceParamIndex = ((finalType.isView() || finalType.name == "Span") && bind->value)
@@ -1281,7 +1502,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                     reportError(tryStmt, "`try ... else` failure block must terminate the current control path.");
                 }
 
-                scopes.enterScope();
+                enterSemanticScope();
                 defineVariable(
                     tryStmt->failName,
                     failType,
@@ -1289,12 +1510,16 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                     "Duplicate try failure binding: " + tryStmt->failName,
                     tryStmt->span);
                 analyzeBlock(tryStmt->failBlock.get());
-                scopes.exitScope();
+                exitSemanticScope();
             }
         }
 
         if (rawDepth == 0 && isRawAddressType(finalType)) {
             reportError(tryStmt, "Raw address values may only appear inside raw blocks.");
+        }
+        validateScopedViewType(finalType, tryStmt, "`try` bindings");
+        if (finalType.isView() && !finalType.viewScope.empty()) {
+            validateScopedBorrowSource(tryStmt->expr.get(), finalType, tryStmt, "`try` binding");
         }
 
         analysisResult.tryBindingTypes[tryStmt] = finalType;
@@ -1360,6 +1585,16 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                             "Assigned value type mismatch for '" + ident->name + "': expected " +
                                 sym->type.describe() + ", got " + valueType.describe());
                     }
+                    if (sym->type.isView() && !sym->type.viewScope.empty()) {
+                        validateScopedBorrowSource(assign->value.get(), sym->type, assign, "assignment");
+                    }
+                    if (valueType.isView() && !valueType.viewScope.empty() &&
+                        (!sym->type.isView() || sym->type.viewScope.empty())) {
+                        reportError(
+                            assign,
+                            "Scoped ref `" + valueType.describe() + "` cannot escape into `" + ident->name +
+                                "`. Keep it inside `scope " + valueType.viewScope + "` or store an owned value instead.");
+                    }
 
                     if (sym->type.isView()) {
                         sym->viewSourceParamIndex = resolveViewSourceParam(assign->value.get());
@@ -1405,6 +1640,11 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             : makePlainType("Unit");
         if (valueType.isOpaqueExternal()) {
             reportError(give->value.get(), opaqueExternalValueUseMessage(valueType, "return value"));
+        } else if (!valueType.viewScope.empty()) {
+            reportError(
+                give,
+                "Scoped ref `" + valueType.describe() + "` cannot leave `scope " + valueType.viewScope +
+                    "`. Return an owned value instead or keep the borrow inside that scope.");
         } else if (currentSignature && currentSignature->returnType.isView()) {
             if (!canBorrowAsView(valueType, currentSignature->returnType)) {
                 reportError(
@@ -1414,7 +1654,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             }
             const auto sourceParamIndex = give->value ? resolveViewSourceParam(give->value.get()) : std::nullopt;
             if (!sourceParamIndex.has_value()) {
-                reportError(give, "Returned ref value must come from one of the function's ref parameters. It cannot point into a local value or temporary.");
+                reportError(give, "Returned ref value must come from one of the function's ref parameters. Return an owned value instead, use Anchor[T] for stable storage, or keep the borrow inside a scope block.");
             } else if (!currentViewReturnSeen) {
                 currentViewReturnSourceParam = sourceParamIndex;
                 currentViewReturnSeen = true;
@@ -1452,14 +1692,14 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             reportError(when->condition.get(), "'when' condition must be Bool, got " + conditionType.describe());
         }
 
-        scopes.enterScope();
+        enterSemanticScope();
         analyzeBlock(when->thenBlock.get());
-        scopes.exitScope();
+        exitSemanticScope();
 
         if (when->elseBlock) {
-            scopes.enterScope();
+            enterSemanticScope();
             analyzeBlock(when->elseBlock.get());
-            scopes.exitScope();
+            exitSemanticScope();
         }
         return;
     }
@@ -1474,11 +1714,11 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             }
         }
 
-        scopes.enterScope();
+        enterSemanticScope();
         ++loopDepth;
         analyzeBlock(loop->body.get());
         --loopDepth;
-        scopes.exitScope();
+        exitSemanticScope();
         return;
     }
 
@@ -1495,12 +1735,23 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         }
         analysisResult.scanItemTypes[scan] = itemType;
 
-        scopes.enterScope();
+        enterSemanticScope();
         ++loopDepth;
         defineVariable(scan->itemName, itemType, false, "Duplicate scan variable: " + scan->itemName, scan->span);
         analyzeBlock(scan->body.get());
         --loopDepth;
-        scopes.exitScope();
+        exitSemanticScope();
+        return;
+    }
+
+    if (auto* scopeStmt = dynamic_cast<ScopeStmt*>(stmt)) {
+        enterSemanticScope();
+        const bool namedScopeActive = enterNamedBorrowScope(scopeStmt->name, scopeStmt->span);
+        analyzeBlock(scopeStmt->body.get());
+        if (namedScopeActive) {
+            exitNamedBorrowScope();
+        }
+        exitSemanticScope();
         return;
     }
 
@@ -1525,7 +1776,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                 reportError(branch.span, "Duplicate pick branch: " + branch.tag);
             }
 
-            scopes.enterScope();
+            enterSemanticScope();
 
             if (choiceInfo) {
                 const auto variantIt = choiceInfo->variants.find(branch.tag);
@@ -1558,7 +1809,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             }
 
             analyzeBlock(branch.body.get());
-            scopes.exitScope();
+            exitSemanticScope();
         }
 
         if (choiceInfo && seenTags.size() != choiceInfo->variantOrder.size()) {
@@ -1591,21 +1842,21 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             reportError(lift, "'lift' failure block must terminate the current control path.");
         }
 
-        scopes.enterScope();
+        enterSemanticScope();
         defineVariable(lift->failName, failType, false, "Duplicate lift failure binding: " + lift->failName, lift->span);
         analyzeBlock(lift->failBlock.get());
-        scopes.exitScope();
+        exitSemanticScope();
 
         defineVariable(lift->valueName, okType, false, "Duplicate lift success binding: " + lift->valueName, lift->span);
         return;
     }
 
     if (auto* raw = dynamic_cast<RawStmt*>(stmt)) {
-        scopes.enterScope();
+        enterSemanticScope();
         ++rawDepth;
         analyzeBlock(raw->body.get());
         --rawDepth;
-        scopes.exitScope();
+        exitSemanticScope();
         return;
     }
 
@@ -1755,9 +2006,18 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr, const ResolvedType* expec
         if (borrow->isMutable && !canBorrowExprAsEdit(borrow->target.get())) {
             reportError(borrow, "Mutable borrow requires mutable storage or ref mut access.");
         }
+        if (!borrow->scopeName.empty()) {
+            ResolvedType scopedType = targetType;
+            scopedType.viewKind = "look";
+            scopedType.viewScope = borrow->scopeName;
+            scopedType.category = TypeCategory::View;
+            validateScopedViewType(scopedType, borrow, "borrow expressions");
+            validateScopedBorrowSource(borrow->target.get(), scopedType, borrow, "borrow expression");
+        }
 
         type = targetType;
         type.viewKind = borrow->isMutable ? "edit" : "look";
+        type.viewScope = borrow->scopeName;
         type.category = TypeCategory::View;
     } else if (auto* binary = dynamic_cast<BinaryExpr*>(expr)) {
         const bool isComparison = binary->op == "==" || binary->op == "!=" || binary->op == "<" || binary->op == "<=" ||
@@ -1887,6 +2147,21 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr, const ResolvedType* expec
             }
 
             if (!signature && !externalCall && !skipCalleeAnalysis) {
+                if (auto* objectIdent = dynamic_cast<IdentExpr*>(member->object.get())) {
+                    if (objectIdent->name == "Anchor" && member->member == "new") {
+                        if (call->args.size() != 1) {
+                            reportError(call, "Constructor 'Anchor.new' expects 1 argument.");
+                        } else {
+                            const ResolvedType argType = analyzeExpr(call->args[0].get());
+                            ResolvedType anchorType = makeOwnedType("Anchor");
+                            anchorType.params.push_back(argType);
+                            type = anchorType;
+                            analysisResult.exprTypes[expr] = type;
+                            return type;
+                        }
+                    }
+                }
+
                 const ResolvedType receiverType = analyzeExpr(member->object.get());
                 if (receiverType.isOpaqueExternal()) {
                     reportError(member->object.get(), opaqueExternalValueUseMessage(receiverType, "method receiver"));
@@ -1956,6 +2231,30 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr, const ResolvedType* expec
             }
 
             type = signature->returnType;
+            if (type.isView() && signature->viewReturnSourceParam.has_value()) {
+                const size_t sourceIndex = *signature->viewReturnSourceParam;
+                if (sourceIndex < call->args.size()) {
+                    if (const auto* sourceType = lookupExprType(call->args[sourceIndex].get())) {
+                        type.viewScope = sourceType->viewScope;
+                    }
+                }
+            }
+            if (type.isView() && methodSignature.has_value()) {
+                if (methodSignature->viewReturnFromReceiver) {
+                    if (auto* member = dynamic_cast<MemberExpr*>(call->callee.get())) {
+                        if (const auto* receiverType = lookupExprType(member->object.get())) {
+                            type.viewScope = receiverType->viewScope;
+                        }
+                    }
+                } else if (methodSignature->viewReturnSourceArg.has_value()) {
+                    const size_t sourceIndex = *methodSignature->viewReturnSourceArg;
+                    if (sourceIndex < call->args.size()) {
+                        if (const auto* sourceType = lookupExprType(call->args[sourceIndex].get())) {
+                            type.viewScope = sourceType->viewScope;
+                        }
+                    }
+                }
+            }
         } else {
             if (!externalCall) {
                 if (auto* calleeIdent = dynamic_cast<IdentExpr*>(call->callee.get())) {
@@ -2140,6 +2439,14 @@ bool SemanticAnalyzer::canBorrowAsView(const ResolvedType& from, const ResolvedT
         }
     }
 
+    if (!to.viewScope.empty()) {
+        if (from.isView() && !from.viewScope.empty() && from.viewScope != to.viewScope) {
+            return false;
+        }
+    } else if (from.isView() && !from.viewScope.empty()) {
+        return to.viewKind == "look";
+    }
+
     if (from.isOwned()) {
         return true;
     }
@@ -2157,6 +2464,10 @@ bool SemanticAnalyzer::canPassArgumentType(Expr* expr, const ResolvedType& from,
     }
 
     if (canAssignType(from, to)) {
+        return true;
+    }
+
+    if (from.isView() && !from.viewScope.empty() && to.isView() && to.viewScope.empty() && to.viewKind == "look") {
         return true;
     }
 
@@ -2254,6 +2565,7 @@ void SemanticAnalyzer::defineVariable(
     sym->type = type;
     sym->bindingDecl = bindingDecl;
     sym->viewSourceParamIndex = viewSourceParamIndex;
+    sym->lexicalDepth = lexicalScopeDepth;
 
     if (!scopes.define(name, sym)) {
         reportError(duplicateSpan, duplicateMessage);
@@ -2300,10 +2612,15 @@ bool SemanticAnalyzer::stmtDefinitelyTerminates(const Stmt* stmt) const {
         return blockDefinitelyTerminates(raw->body.get());
     }
 
+    if (auto* scopeStmt = dynamic_cast<const ScopeStmt*>(stmt)) {
+        return blockDefinitelyTerminates(scopeStmt->body.get());
+    }
+
     return false;
 }
 
 } // namespace claw::frontend
+
 
 
 
