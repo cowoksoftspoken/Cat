@@ -1,0 +1,8 @@
+fn borrow(anchor: ref Anchor[Str]) -> ref Str {
+    anchor.get()
+}
+
+fn main() {
+    val stable = Anchor.new("anchor")
+    println(borrow(ref stable))
+}

@@ -18,6 +18,7 @@ struct Symbol {
     ResolvedType type;
     const BindingStmt* bindingDecl = nullptr;
     std::optional<size_t> viewSourceParamIndex;
+    int lexicalDepth = 0;
     std::shared_ptr<ModuleInfo> moduleInfo;
 };
 

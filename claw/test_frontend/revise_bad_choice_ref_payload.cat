@@ -1,0 +1,8 @@
+choice MaybeRef {
+    Some(value: ref Str)
+    None
+}
+
+fn main() {
+    println("ok")
+}

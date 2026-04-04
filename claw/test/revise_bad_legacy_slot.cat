@@ -1,4 +1,0 @@
-fn main() {
-    slot x: Int32 = 1
-    println(x)
-}

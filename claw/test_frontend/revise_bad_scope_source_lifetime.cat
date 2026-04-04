@@ -1,0 +1,13 @@
+fn main() {
+    val source = "outer"
+
+    scope s {
+        if true {
+            val local = "inner"
+            val leaked: ref[s] Str = ref[s] local
+            println(leaked)
+        }
+
+        println(source)
+    }
+}

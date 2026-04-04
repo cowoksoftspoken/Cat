@@ -1,0 +1,10 @@
+fn borrow(input: ref Str) -> ref Str {
+    scope s {
+        val view: ref[s] Str = ref[s] input
+        return view
+    }
+}
+
+fn main() {
+    println("unreachable")
+}

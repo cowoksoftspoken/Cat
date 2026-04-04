@@ -212,6 +212,12 @@ std::string AirEmitter::emitStmt(const Stmt* stmt, int indent) const {
         return out.str();
     }
 
+    if (auto* scopeStmt = dynamic_cast<const ScopeStmt*>(stmt)) {
+        out << pad << "scope " << scopeStmt->name << "\n";
+        out << emitBlock(scopeStmt->body.get(), indent + 1);
+        return out.str();
+    }
+
     if (auto* pick = dynamic_cast<const PickStmt*>(stmt)) {
         out << pad << "pick " << emitExpr(pick->value.get()) << "\n";
         for (const auto& branch : pick->branches) {
@@ -309,6 +315,14 @@ std::string AirEmitter::emitExprValue(const Expr* expr) const {
         out << ")";
     } else if (auto* member = dynamic_cast<const MemberExpr*>(expr)) {
         out << emitExprValue(member->object.get()) << "." << member->member;
+    } else if (auto* borrow = dynamic_cast<const BorrowExpr*>(expr)) {
+        out << "ref";
+        if (!borrow->scopeName.empty()) {
+            out << "[" << borrow->scopeName << "]";
+        } else if (borrow->isMutable) {
+            out << " mut";
+        }
+        out << " " << emitExprValue(borrow->target.get());
     } else {
         out << "<expr>";
     }

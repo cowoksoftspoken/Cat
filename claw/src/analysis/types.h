@@ -69,6 +69,7 @@ enum class LinkageKind {
 struct ResolvedType {
     std::string name;
     std::string viewKind;
+    std::string viewScope;
     std::vector<ResolvedType> params;
     TypeCategory category = TypeCategory::Unknown;
     bool isGeneric = false;

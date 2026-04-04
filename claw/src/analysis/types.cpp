@@ -59,6 +59,9 @@ std::string canonicalTypeKey(const ResolvedType& type) {
     std::ostringstream out;
     if (!type.viewKind.empty()) {
         out << type.viewKind << ':';
+        if (!type.viewScope.empty()) {
+            out << '[' << type.viewScope << ']';
+        }
     }
     out << type.name;
     if (!type.params.empty()) {
@@ -419,7 +422,11 @@ bool ResolvedType::isView() const {
 std::string ResolvedType::describe() const {
     std::ostringstream out;
     if (!viewKind.empty()) {
-        out << surfaceViewPrefix(viewKind) << ' ';
+        out << surfaceViewPrefix(viewKind);
+        if (!viewScope.empty()) {
+            out << "[" << viewScope << "]";
+        }
+        out << ' ';
     }
     if (isOpaqueExternal()) {
         out << "opaque external result";
@@ -467,7 +474,8 @@ TargetSpec defaultTargetSpec() {
 }
 
 bool sameType(const ResolvedType& left, const ResolvedType& right) {
-    if (left.name != right.name || left.viewKind != right.viewKind || left.params.size() != right.params.size()) {
+    if (left.name != right.name || left.viewKind != right.viewKind || left.viewScope != right.viewScope ||
+        left.params.size() != right.params.size()) {
         return false;
     }
 
@@ -533,6 +541,7 @@ ResolvedType adaptMemberType(const ResolvedType& baseType, const ResolvedType& f
 
     ResolvedType adapted = fieldType;
     adapted.viewKind = baseType.viewKind;
+    adapted.viewScope = baseType.viewScope;
     adapted.category = TypeCategory::View;
     return adapted;
 }
@@ -557,6 +566,7 @@ ResolvedType substituteType(
             ResolvedType substituted = it->second;
             if (!type.viewKind.empty()) {
                 substituted.viewKind = type.viewKind;
+                substituted.viewScope = type.viewScope;
                 substituted.category = TypeCategory::View;
             }
             return substituted;
@@ -592,6 +602,7 @@ TypeCatalog::TypeCatalog()
     registerKnownTypeArity("Vec", 1);
     registerKnownTypeArity("Queue", 1);
     registerKnownTypeArity("Set", 1);
+    registerKnownTypeArity("Anchor", 1);
     registerKnownTypeArity("Maybe", 1);
     registerKnownTypeArity("Map", 2);
     registerKnownTypeArity("Result", 2);
@@ -637,6 +648,7 @@ ResolvedType TypeCatalog::resolveType(
     ResolvedType type;
     type.name = contains(localTypeParams, node->name) ? node->name : canonicalTypeName(node->name);
     type.viewKind = node->viewKind;
+    type.viewScope = node->viewScope;
 
     std::optional<size_t> expectedArity;
 

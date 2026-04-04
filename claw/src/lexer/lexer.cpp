@@ -99,23 +99,20 @@ Token Lexer::readIdentifierOrKeyword() {
 
     static const std::unordered_map<std::string, TokenKind> keywords = {
         {"fn", TokenKind::KwFn}, {"val", TokenKind::KwVal}, {"var", TokenKind::KwVar},
-        {"hold", TokenKind::KwHold}, {"slot", TokenKind::KwSlot},
-        {"return", TokenKind::KwReturn}, {"give", TokenKind::KwGive},
+        {"return", TokenKind::KwReturn},
         {"if", TokenKind::KwIf}, {"else", TokenKind::KwElse},
-        {"when", TokenKind::KwWhen}, {"otherwise", TokenKind::KwOtherwise},
         {"loop", TokenKind::KwLoop}, {"scan", TokenKind::KwScan}, {"stop", TokenKind::KwStop},
-        {"skip", TokenKind::KwSkip}, {"shape", TokenKind::KwShape}, {"choice", TokenKind::KwChoice},
+        {"skip", TokenKind::KwSkip}, {"scope", TokenKind::KwScope},
+        {"shape", TokenKind::KwShape}, {"choice", TokenKind::KwChoice},
         {"import", TokenKind::KwImport}, {"share", TokenKind::KwShare}, {"super", TokenKind::KwSuper},
         {"pub", TokenKind::KwPub}, {"modules", TokenKind::KwModules},
         {"pick", TokenKind::KwPick}, {"lift", TokenKind::KwLift}, {"raw", TokenKind::KwRaw},
-        {"as", TokenKind::KwAs}, {"over", TokenKind::KwOver}, {"of", TokenKind::KwOf},
-        {"fail", TokenKind::KwFail}, {"ref", TokenKind::KwRef}, {"mut", TokenKind::KwMut},
-        {"look", TokenKind::KwLook}, {"edit", TokenKind::KwEdit}, {"try", TokenKind::KwTry},
+        {"as", TokenKind::KwAs}, {"over", TokenKind::KwOver},
+        {"fail", TokenKind::KwFail}, {"ref", TokenKind::KwRef}, {"mut", TokenKind::KwMut}, {"try", TokenKind::KwTry},
         {"foreign", TokenKind::KwForeign}, {"static", TokenKind::KwStatic},
         {"contract", TokenKind::KwContract}, {"implements", TokenKind::KwImplements},
         {"with", TokenKind::KwWith}, {"self", TokenKind::KwSelf},
-        {"true", TokenKind::KwTrue}, {"false", TokenKind::KwFalse},
-        {"realm", TokenKind::KwRealm}
+        {"true", TokenKind::KwTrue}, {"false", TokenKind::KwFalse}
     };
 
     const auto it = keywords.find(text);

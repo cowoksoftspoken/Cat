@@ -1,0 +1,13 @@
+fn identity(input: ref Str) -> ref Str {
+    return input
+}
+
+fn main() {
+    val source = "scope"
+
+    scope s {
+        val view: ref[s] Str = ref[s] source
+        val again: ref[s] Str = identity(view)
+        println(again)
+    }
+}

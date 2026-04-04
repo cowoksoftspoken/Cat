@@ -11,17 +11,17 @@ add_library(claw_frontend
     src/ir/air.cpp
     src/ir/oir.cpp
     src/ir/lir.cpp
-    src/backend/llvm_ir.cpp
-    src/backend/llvm_types.cpp
-    src/backend/llvm_values.cpp
-    src/backend/llvm_control.cpp
-    src/backend/llvm_emit.cpp
+    src/codegen/llvm.cpp
+    src/codegen/llvm_types.cpp
+    src/codegen/llvm_values.cpp
+    src/codegen/llvm_control.cpp
+    src/codegen/llvm_emit.cpp
     src/analysis/types.cpp
     src/analysis/scope.cpp
     src/analysis/sema.cpp
     src/analysis/ownership.cpp
-    src/module/project.cpp
-    src/module/project_config.cpp
+    src/workspace/workspace.cpp
+    src/workspace/config.cpp
 )
 target_include_directories(claw_frontend PUBLIC src)
 
