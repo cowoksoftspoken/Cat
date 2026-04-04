@@ -1,6 +1,6 @@
 #include "driver/native_build.h"
 
-#include "backend/llvm_ir.h"
+#include "codegen/llvm.h"
 
 #include <fstream>
 #include <process.h>
@@ -102,7 +102,7 @@ int runClangLink(
 
 namespace claw::driver {
 
-std::filesystem::path defaultNativeOutputPath(const claw::frontend::LoadedProject& project) {
+std::filesystem::path defaultNativeOutputPath(const claw::workspace::LoadedProject& project) {
     const std::string preferredName =
         project.config.has_value() && !project.config->name.empty()
             ? project.config->name
@@ -111,7 +111,7 @@ std::filesystem::path defaultNativeOutputPath(const claw::frontend::LoadedProjec
 }
 
 std::filesystem::path buildNativeExecutable(
-    const claw::frontend::LoadedProject& project,
+    const claw::workspace::LoadedProject& project,
     std::string_view entryRealm,
     const std::vector<claw::frontend::OirUnitView>& units,
     const std::filesystem::path& compilerBinaryPath,
@@ -126,7 +126,7 @@ std::filesystem::path buildNativeExecutable(
 
     auto llvmOutputPath = absoluteOutput;
     llvmOutputPath.replace_extension(".ll");
-    const std::string llvmIr = claw::frontend::emitNativeLlvmIr(entryRealm, units);
+    const std::string llvmIr = claw::codegen::emitNativeLlvmIr(entryRealm, units);
     writeTextFile(llvmOutputPath, llvmIr);
 
     const int result = runClangLink(llvmOutputPath, runtimePath, absoluteOutput);

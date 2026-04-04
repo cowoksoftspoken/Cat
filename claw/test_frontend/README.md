@@ -25,8 +25,10 @@ Coverage focus:
 - revised module/workspace rules
 - revised AIR printing
 - revised `Result` / `try` semantic validation
+- Anchor stable-storage semantics and scoped/borrow diagnostics
 - revised diagnostics for entry and `try` misuse
 
 Backend and native integration suites live separately:
 - `bash test_backend/run_backend_tests.sh`
 - `bash test_native/run_native_tests.sh`
+

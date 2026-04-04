@@ -1,4 +1,4 @@
-#include "module/project.h"
+#include "workspace/workspace.h"
 
 #include "ast/ast.h"
 #include "diagnostics/diagnostics.h"
@@ -12,7 +12,9 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace claw::frontend {
+namespace claw::workspace {
+
+using namespace claw::frontend;
 
 namespace {
 
@@ -1014,7 +1016,7 @@ LoadedProject ProjectLoader::load(const std::filesystem::path& inputPath) {
     return std::move(project);
 }
 
-} // namespace claw::frontend
+} // namespace claw::workspace
 
 
 

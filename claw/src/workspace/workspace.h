@@ -11,8 +11,16 @@
 #include <vector>
 
 namespace claw::frontend {
-
 struct RealmDecl;
+}
+
+namespace claw::workspace {
+
+using claw::frontend::Diagnostic;
+using claw::frontend::ImportedBinding;
+using RealmDecl = claw::frontend::RealmDecl;
+using claw::frontend::SourceSpan;
+using claw::frontend::TargetSpec;
 
 struct LoadedUnit {
     std::filesystem::path path;
@@ -103,6 +111,4 @@ private:
     [[noreturn]] void throwDiagnostics(std::vector<Diagnostic> diagnostics) const;
 };
 
-} // namespace claw::frontend
-
-
+} // namespace claw::workspace

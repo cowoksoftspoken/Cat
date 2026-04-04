@@ -69,6 +69,7 @@ private:
     void exitNamedBorrowScope();
     const NamedBorrowScope* lookupNamedBorrowScope(const std::string& name) const;
     bool validateScopedViewType(const ResolvedType& type, const AstNode* node, std::string_view context);
+    bool validateAnchorPayloadType(const ResolvedType& type, const AstNode* node, std::string_view context);
     const Symbol* resolveBorrowSourceSymbol(const Expr* expr) const;
     bool validateScopedBorrowSource(const Expr* expr, const ResolvedType& targetType, const AstNode* node, std::string_view context);
     void registerPrelude();
@@ -118,3 +119,4 @@ private:
 };
 
 } // namespace claw::frontend
+

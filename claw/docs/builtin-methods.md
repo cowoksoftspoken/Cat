@@ -38,6 +38,14 @@ Notes:
 - `scan` over `Str` yields `UInt8` (byte-level iteration)
 - `Char`-first iteration is planned but not yet implemented
 
+### Anchor[T]
+
+- `get() -> ref T`
+
+Notes:
+- `Anchor.new(value)` is a built-in constructor, not a free function
+- `Anchor.get()` returns `ref T` directly
+- `Anchor[T]` only accepts owned payloads; borrowed payloads such as `ref T` or `Span[T]` are rejected
 ### Span[T]
 
 - `len() -> USize`
@@ -90,3 +98,4 @@ Notes:
 - All receiver groups now use finalized PRD names
 - Legacy types (`Bytes`, `Ring[T]`, `Table[K,V]`) have been removed
 - Return types use `UInt8` and `Int64` instead of legacy `Byte` / `ISize`
+

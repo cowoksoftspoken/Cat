@@ -1,6 +1,6 @@
-#include "backend/llvm_internal.h"
+#include "codegen/llvm_internal.h"
 
-namespace claw::frontend {
+namespace claw::codegen {
 
 void LlvmEmitter::emitIterNext(
     const LirIterNextInst& value,
@@ -194,6 +194,44 @@ bool LlvmEmitter::emitLift(const LirLiftInst& value, FunctionState& state, std::
 
 void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state, std::vector<std::string>& lines) {
     const std::string receiverName = receiverSegment(value.callee);
+    const std::string methodName = tailSegment(value.callee);
+    const auto storeResultType = [&]() {
+        if (value.result.has_value()) {
+            state.valueTypes[*value.result] = value.type;
+        }
+    };
+
+    if (receiverName == "Anchor" && methodName == "new") {
+        if (value.args.size() != 1 || !value.result.has_value()) {
+            throw std::runtime_error("LLVM lowering expected Anchor.new to produce exactly one result from one payload argument.");
+        }
+
+        const ParsedTypeName parsedResult = parseTypeName(value.type);
+        if (parsedResult.base != "Anchor" || parsedResult.args.size() != 1) {
+            throw std::runtime_error("LLVM lowering expected Anchor.new result type to be Anchor[T], got '" + value.type + "'.");
+        }
+
+        const std::string payloadType = parsedResult.args.front();
+        const auto payloadLayout = abiLayoutForType(payloadType);
+        if (!payloadLayout.has_value()) {
+            throw std::runtime_error("LLVM lowering does not yet support Anchor payload type '" + payloadType + "'.");
+        }
+
+        addRuntimeDecl("declare ptr @\"claw.runtime.anchor.alloc\"(i64, i64)");
+        const std::string resultReg = localName(*value.result);
+        lines.push_back(
+            "  " + resultReg + " = call ptr @\"claw.runtime.anchor.alloc\"(i64 " + std::to_string(payloadLayout->size) +
+            ", i64 " + std::to_string(payloadLayout->align) + ")");
+
+        const std::string payloadValue = ensureValue(value.args.front(), state, lines);
+        storeValueToAddress(resultReg, payloadType, payloadValue, payloadLayout->align, lines);
+        state.namedValues[*value.result] = resultReg;
+        state.namedAddresses.erase(*value.result);
+        state.params.erase(*value.result);
+        storeResultType();
+        return;
+    }
+
     if (receiverName.empty()) {
         throw std::runtime_error("LLVM lowering expected a builtin receiver for '" + value.callee + "'.");
     }
@@ -204,13 +242,18 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
     }
 
     const std::string receiverValue = ensureNamedValue(receiverName, state, lines);
-    const std::string methodName = tailSegment(value.callee);
     const std::string baseType = canonicalBackendTypeBase(stripGenericArgs(stripViewPrefix(receiverType)));
-    const auto storeResultType = [&]() {
-        if (value.result.has_value()) {
-            state.valueTypes[*value.result] = value.type;
+
+    if (baseType == "Anchor" && methodName == "get") {
+        if (!value.result.has_value()) {
+            return;
         }
-    };
+        state.namedAddresses[*value.result] = receiverValue;
+        state.namedValues.erase(*value.result);
+        state.params.erase(*value.result);
+        storeResultType();
+        return;
+    }
 
     if (baseType == "Str" && methodName == "len") {
         if (!value.result.has_value()) {
@@ -297,4 +340,5 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
     throw std::runtime_error("LLVM lowering does not yet support builtin method '" + value.callee + "'.");
 }
 
-} // namespace claw::frontend
+} // namespace claw::codegen
+

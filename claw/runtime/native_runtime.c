@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 typedef struct claw_slice {
     const unsigned char* ptr;
@@ -46,6 +47,22 @@ static void claw_write_i128(__int128 value) {
     }
 }
 
+void* claw_runtime_anchor_alloc(int64_t size, int64_t align) __asm__("claw.runtime.anchor.alloc");
+void claw_runtime_anchor_free(void* value) __asm__("claw.runtime.anchor.free");
+
+void* claw_runtime_anchor_alloc(int64_t size, int64_t align) {
+    (void)align;
+    const size_t alloc_size = size > 0 ? (size_t)size : 1u;
+    void* value = malloc(alloc_size);
+    if (value == NULL) {
+        abort();
+    }
+    return value;
+}
+
+void claw_runtime_anchor_free(void* value) {
+    free(value);
+}
 static void claw_finish_print(bool newline) {
     if (newline) {
         fputc('\n', stdout);
@@ -186,3 +203,5 @@ void claw_runtime_println_buffer(claw_buffer value) {
     claw_write_bytes(value.ptr, value.len);
     claw_finish_print(true);
 }
+
+

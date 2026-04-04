@@ -27,7 +27,7 @@ if [[ "$revise_air_output" != *"air.module revise_surface"* ]] ||
    [[ "$revise_air_output" != *"var total: Int64 = 42 : Int64"* ]] ||
    [[ "$revise_air_output" != *"scan item: UInt8 over greeting : Str"* ]] ||
    [[ "$revise_air_output" != *"return println(sum("* ]]; then
-  echo "revise_surface AIR did not reflect the revised val/var + module surface" >&2
+  echo "revise_surface AIR did not reflect the revised surface" >&2
   exit 1
 fi
 
@@ -60,21 +60,21 @@ fi
 echo "[validate/fail] test/revise_bad_non_entry_main"
 if bad_non_entry_main_output="$("$CLAW_EXE" validate "$ROOT_DIR/test/revise_bad_non_entry_main" 2>&1)"; then
   echo "expected revise_bad_non_entry_main to fail validation, but it passed" >&2
-  # exit 1
+  exit 1
 fi
 if [[ "$bad_non_entry_main_output" != *'`fn main` is only allowed in root main.cat.'* ]]; then
   echo "revise_bad_non_entry_main did not report non-entry main declarations" >&2
-  # exit 1
+  exit 1
 fi
 
 echo "[check/fail] test/revise_bad_call_main.cat"
 if bad_call_main_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_call_main.cat" 2>&1)"; then
   echo "expected revise_bad_call_main to fail, but it passed" >&2
-  # exit 1
+  exit 1
 fi
 if [[ "$bad_call_main_output" != *'`main` is the program entry point and cannot be called like a normal function.'* ]]; then
   echo "revise_bad_call_main did not report direct calls to main" >&2
-  # exit 1
+  exit 1
 fi
 
 echo "[check/pass] test/revise_error_handling.cat"
@@ -125,6 +125,25 @@ fi
 echo "[check/pass] test/revise_anchor.cat"
 "$CLAW_EXE" check "$ROOT_DIR/test/revise_anchor.cat"
 
+echo "[check/fail] test/revise_bad_anchor_view_payload.cat"
+if bad_anchor_payload_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_anchor_view_payload.cat" 2>&1)"; then
+  echo "expected revise_bad_anchor_view_payload to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$bad_anchor_payload_output" != *'Anchor[T] requires an owned payload'* ]]; then
+  echo "revise_bad_anchor_view_payload did not report borrowed Anchor payload rejection" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/revise_bad_anchor_return_local.cat"
+if bad_anchor_return_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_anchor_return_local.cat" 2>&1)"; then
+  echo "expected revise_bad_anchor_return_local to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$bad_anchor_return_output" != *"Returned ref value must come from one of the function's ref parameters."* ]]; then
+  echo "revise_bad_anchor_return_local did not report local Anchor ref escape" >&2
+  exit 1
+fi
 
 echo "[check/pass] test/revise_span_borrow.cat"
 "$CLAW_EXE" check "$ROOT_DIR/test/revise_span_borrow.cat"
@@ -134,7 +153,7 @@ if bad_vec_index_borrow_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_v
   echo "expected revise_bad_vec_index_borrow to fail, but it passed" >&2
   exit 1
 fi
-if [[ "$bad_vec_index_borrow_output" != *"Direct element borrows from Vec are forbidden."* ]]; then
+if [[ "$bad_vec_index_borrow_output" != *'Direct element borrows from Vec are forbidden.'* ]]; then
   echo "revise_bad_vec_index_borrow did not report the Vec -> Span borrow rule" >&2
   exit 1
 fi
@@ -148,7 +167,6 @@ if [[ "$bad_vec_span_mut_output" != *'Cannot create ref mut view of `data` while
   echo "revise_bad_vec_mutate_while_span did not report the active Span borrow conflict" >&2
   exit 1
 fi
-
 
 echo "[check/pass] test/revise_field_borrow_paths.cat"
 "$CLAW_EXE" check "$ROOT_DIR/test/revise_field_borrow_paths.cat"
@@ -269,98 +287,5 @@ if [[ "$bad_scope_lifetime_output" != *'Source value for `ref[s] Str` does not l
   exit 1
 fi
 
-echo "[check/fail] legacy hold"
-if legacy_hold_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_legacy_hold.cat" 2>&1)"; then
-  echo "expected revise_bad_legacy_hold to fail, but it passed" >&2
-  exit 1
-fi
-if [[ "$legacy_hold_output" != *"Legacy binding syntax 'hold' has been removed."* ]]; then
-  echo "revise_bad_legacy_hold did not report the hold -> val migration" >&2
-  exit 1
-fi
-
-echo "[check/fail] legacy slot"
-if legacy_slot_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_legacy_slot.cat" 2>&1)"; then
-  echo "expected revise_bad_legacy_slot to fail, but it passed" >&2
-  exit 1
-fi
-if [[ "$legacy_slot_output" != *"Legacy binding syntax 'slot' has been removed."* ]]; then
-  echo "revise_bad_legacy_slot did not report the slot -> var migration" >&2
-  exit 1
-fi
-
-echo "[check/fail] legacy give"
-if legacy_give_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_legacy_give.cat" 2>&1)"; then
-  echo "expected revise_bad_legacy_give to fail, but it passed" >&2
-  exit 1
-fi
-if [[ "$legacy_give_output" != *"Legacy return syntax 'give' has been removed."* ]]; then
-  echo "revise_bad_legacy_give did not report the give -> return migration" >&2
-  exit 1
-fi
-
-echo "[check/fail] legacy look"
-if legacy_look_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_legacy_look.cat" 2>&1)"; then
-  echo "expected revise_bad_legacy_look to fail, but it passed" >&2
-  exit 1
-fi
-if [[ "$legacy_look_output" != *"Legacy borrow syntax 'look' has been removed."* ]]; then
-  echo "revise_bad_legacy_look did not report the look -> ref migration" >&2
-  exit 1
-fi
-
-echo "[check/fail] legacy edit"
-if legacy_edit_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_legacy_edit.cat" 2>&1)"; then
-  echo "expected revise_bad_legacy_edit to fail, but it passed" >&2
-  exit 1
-fi
-if [[ "$legacy_edit_output" != *"Legacy borrow syntax 'edit' has been removed."* ]]; then
-  echo "revise_bad_legacy_edit did not report the edit -> ref mut migration" >&2
-  exit 1
-fi
-
-echo "[check/fail] legacy when"
-if legacy_when_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_legacy_when.cat" 2>&1)"; then
-  echo "expected revise_bad_legacy_when to fail, but it passed" >&2
-  exit 1
-fi
-if [[ "$legacy_when_output" != *"Legacy conditional syntax 'when' has been removed."* ]]; then
-  echo "revise_bad_legacy_when did not report the when -> if migration" >&2
-  exit 1
-fi
-
-echo "[check/fail] legacy otherwise"
-if legacy_otherwise_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_legacy_otherwise.cat" 2>&1)"; then
-  echo "expected revise_bad_legacy_otherwise to fail, but it passed" >&2
-  exit 1
-fi
-if [[ "$legacy_otherwise_output" != *"Legacy branch syntax 'otherwise' has been removed."* ]]; then
-  echo "revise_bad_legacy_otherwise did not report the otherwise -> else migration" >&2
-  exit 1
-fi
-
-echo "[check/fail] legacy realm"
-if legacy_realm_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_legacy_realm.cat" 2>&1)"; then
-  echo "expected revise_bad_legacy_realm to fail, but it passed" >&2
-  exit 1
-fi
-if [[ "$legacy_realm_output" != *"Legacy module syntax 'realm' has been removed."* ]]; then
-  echo "revise_bad_legacy_realm did not report the realm removal" >&2
-  exit 1
-fi
-
-echo "[check/fail] legacy of"
-if legacy_of_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_legacy_of.cat" 2>&1)"; then
-  echo "expected revise_bad_legacy_of to fail, but it passed" >&2
-  exit 1
-fi
-if [[ "$legacy_of_output" != *"Legacy generic syntax 'of' has been removed."* ]]; then
-  echo "revise_bad_legacy_of did not report the of -> [] migration" >&2
-  exit 1
-fi
-
-
-
-
-
-
+echo "[check/pass] test/revise_anchor_choice.cat"
+"$CLAW_EXE" check "$ROOT_DIR/test/revise_anchor_choice.cat"

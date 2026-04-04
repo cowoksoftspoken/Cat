@@ -1,6 +1,6 @@
-#include "backend/llvm_internal.h"
+#include "codegen/llvm_internal.h"
 
-namespace claw::frontend {
+namespace claw::codegen {
 
 void LlvmEmitter::materializeChoiceBinding(
     const PendingChoiceBinding& binding,
@@ -438,4 +438,4 @@ std::string LlvmEmitter::ensureValue(const LirValue& value, FunctionState& state
     throw std::runtime_error("LLVM lowering does not yet support value '" + value.text + "' of type '" + value.type + "'.");
 }
 
-} // namespace claw::frontend
+} // namespace claw::codegen

@@ -1,0 +1,20 @@
+choice StableText {
+    Some(value: Anchor[Str])
+    None
+}
+
+fn print_value(value: StableText) {
+    pick value {
+        Some(stable) {
+            println(stable.get())
+        }
+        None {
+            println("none")
+        }
+    }
+}
+
+fn main() {
+    print_value(Some(Anchor.new("choice")))
+    print_value(None)
+}

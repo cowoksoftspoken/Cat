@@ -1,6 +1,6 @@
 #pragma once
 
-#include "backend/llvm_ir.h"
+#include "codegen/llvm.h"
 
 #include <algorithm>
 #include <cctype>
@@ -15,7 +15,9 @@
 #include <variant>
 #include <vector>
 
-namespace claw::frontend {
+namespace claw::codegen {
+
+using namespace claw::frontend;
 
 template <typename... Ts>
 struct Overloaded : Ts... {
@@ -524,7 +526,7 @@ private:
 
 std::string llvmFunctionLinkage(const SymbolLinkInfo& linkage);
 
-} // namespace claw::frontend
+} // namespace claw::codegen
 
 
 

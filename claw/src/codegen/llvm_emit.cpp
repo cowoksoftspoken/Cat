@@ -1,6 +1,6 @@
-#include "backend/llvm_internal.h"
+#include "codegen/llvm_internal.h"
 
-namespace claw::frontend {
+namespace claw::codegen {
 
 std::string llvmFunctionLinkage(const SymbolLinkInfo& linkage) {
     switch (linkage.linkage) {
@@ -228,7 +228,14 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
                     (void)ensureValue(value.value, state, blockLines);
                 },
                 [&](const LirDropInst& value) {
-                    blockLines.push_back("  ; drop " + value.name + " : " + value.type);
+                    const std::string baseType = canonicalBackendTypeBase(stripGenericArgs(stripViewPrefix(value.type)));
+                    if (baseType == "Anchor") {
+                        addRuntimeDecl("declare void @\"claw.runtime.anchor.free\"(ptr)");
+                        const std::string anchorValue = ensureNamedValue(value.name, state, blockLines);
+                        blockLines.push_back("  call void @\"claw.runtime.anchor.free\"(ptr " + anchorValue + ")");
+                    } else {
+                        blockLines.push_back("  ; drop " + value.name + " : " + value.type);
+                    }
                 },
                 [&](const LirBranchInst& value) {
                     std::string operand = ensureValue(value.condition, state, blockLines);
@@ -449,7 +456,8 @@ std::string LlvmEmitter::emit() {
     return out.str();
 }
 
-} // namespace claw::frontend
+} // namespace claw::codegen
+
 
 
 

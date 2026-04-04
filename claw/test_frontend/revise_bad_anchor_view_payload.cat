@@ -1,0 +1,6 @@
+fn main() {
+    val text = "hello"
+    val view = ref text
+    val stable = Anchor.new(view)
+    println(stable.get())
+}

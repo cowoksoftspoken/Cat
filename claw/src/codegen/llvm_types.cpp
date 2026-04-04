@@ -1,6 +1,6 @@
-#include "backend/llvm_internal.h"
+#include "codegen/llvm_internal.h"
 
-namespace claw::frontend {
+namespace claw::codegen {
 
 void LlvmEmitter::collectDecls() {
     for (const auto& realm : program.realms) {
@@ -477,7 +477,7 @@ const LirFunction* LlvmEmitter::lookupDirectFunction(std::string_view callee) co
     return nullptr;
 }
 
-} // namespace claw::frontend
+} // namespace claw::codegen
 
 
 

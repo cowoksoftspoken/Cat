@@ -11,14 +11,14 @@
 #include "analysis/ownership.h"
 #include "ast/ast.h"
 #include "analysis/sema.h"
-#include "backend/llvm_ir.h"
+#include "codegen/llvm.h"
 #include "diagnostics/diagnostics.h"
 #include "driver/native_build.h"
 #include "ir/air.h"
 #include "ir/oir.h"
 #include "ir/lir.h"
 #include "lexer/lexer.h"
-#include "module/project.h"
+#include "workspace/workspace.h"
 #include "parser/parser.h"
 
 namespace {
@@ -191,8 +191,8 @@ std::vector<claw::frontend::Diagnostic> attachPath(
 }
 
 bool isRootMainEntryUnit(
-    const claw::frontend::LoadedProject& project,
-    const claw::frontend::LoadedUnit& unit) {
+    const claw::workspace::LoadedProject& project,
+    const claw::workspace::LoadedUnit& unit) {
     return project.structuredPackage &&
         unit.path.filename() == "main.cat" &&
         unit.path.parent_path().lexically_normal() == project.packageRoot.lexically_normal();
@@ -379,7 +379,7 @@ const claw::frontend::AstNode* findMainCallNode(const claw::frontend::Stmt* stmt
     return nullptr;
 }
 
-void validateMainDeclarations(const claw::frontend::LoadedProject& project) {
+void validateMainDeclarations(const claw::workspace::LoadedProject& project) {
     std::vector<claw::frontend::Diagnostic> diagnostics;
 
     for (size_t i = 0; i < project.units.size(); ++i) {
@@ -422,7 +422,7 @@ void validateMainDeclarations(const claw::frontend::LoadedProject& project) {
     }
 }
 
-void validateMainCalls(const claw::frontend::LoadedProject& project) {
+void validateMainCalls(const claw::workspace::LoadedProject& project) {
     std::vector<claw::frontend::Diagnostic> diagnostics;
 
     for (const auto& unit : project.units) {
@@ -456,7 +456,7 @@ void validateMainCalls(const claw::frontend::LoadedProject& project) {
 }
 
 std::vector<claw::frontend::Diagnostic> collectProjectWarnings(
-    const claw::frontend::LoadedProject& project) {
+    const claw::workspace::LoadedProject& project) {
     std::vector<claw::frontend::Diagnostic> warnings;
     if (project.units.empty()) {
         return warnings;
@@ -498,7 +498,7 @@ std::vector<claw::frontend::Diagnostic> collectProjectWarnings(
     return warnings;
 }
 
-void neutralizeRootEntrySharedDecls(claw::frontend::LoadedProject& project) {
+void neutralizeRootEntrySharedDecls(claw::workspace::LoadedProject& project) {
     if (project.units.empty()) {
         return;
     }
@@ -517,7 +517,7 @@ void neutralizeRootEntrySharedDecls(claw::frontend::LoadedProject& project) {
 }
 
 void validateEntryPoint(
-    const claw::frontend::LoadedProject& project,
+    const claw::workspace::LoadedProject& project,
     const claw::frontend::SemanticAnalyzer& sema,
     bool requireEntry) {
     const auto& unit = project.units[project.entryIndex];
@@ -630,7 +630,7 @@ int main(int argc, char** argv) {
     const std::string diagnosticPath = openedPath.empty() ? filepath : openedPath.string();
 
     try {
-        claw::frontend::ProjectLoader loader;
+        claw::workspace::ProjectLoader loader;
         auto project = loader.load(openedPath.empty() ? std::filesystem::path(filepath) : openedPath);
 
         const auto warnings = collectProjectWarnings(project);
@@ -703,12 +703,12 @@ int main(int argc, char** argv) {
                 }
             } else if (command == "llvm") {
                 if (emitWholeProject) {
-                    std::cout << claw::frontend::emitLlvmIr(project.units[project.entryIndex].ast->name, units);
+                    std::cout << claw::codegen::emitLlvmIr(project.units[project.entryIndex].ast->name, units);
                 } else {
                     claw::frontend::OirEmitter oir(*analyzers[project.entryIndex], &ownershipCheckers[project.entryIndex]->result());
                     const std::string entryRealm = project.units[project.entryIndex].ast->name;
                     const claw::frontend::OirProgram program{entryRealm, entryRealm + "::main", {oir.lowerRealm(project.units[project.entryIndex].ast.get())}};
-                    std::cout << claw::frontend::emitLlvmIr(claw::frontend::buildLirProgram(program));
+                    std::cout << claw::codegen::emitLlvmIr(claw::frontend::buildLirProgram(program));
                 }
             } else {
                 std::filesystem::path outputPath = outputArg.empty()

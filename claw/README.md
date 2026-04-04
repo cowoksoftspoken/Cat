@@ -123,8 +123,10 @@ bash test_native/run_native_tests.sh
 
 - `src/`
   Compiler source.
-- `src/backend/`
-  LLVM backend implementation.
+- src/codegen/
+  LLVM/backend emission and native codegen boundary.
+- src/workspace/
+  Workspace loading, config parsing, and module graph resolution.
 - `test/`
   Revised frontend regression suite.
 - `test_backend/`

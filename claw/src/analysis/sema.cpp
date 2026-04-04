@@ -627,6 +627,48 @@ bool SemanticAnalyzer::validateScopedViewType(const ResolvedType& type, const As
     return true;
 }
 
+bool SemanticAnalyzer::validateAnchorPayloadType(const ResolvedType& type, const AstNode* node, std::string_view context) {
+    auto validateNested = [&](const auto& self, const ResolvedType& current) -> bool {
+        if (current.isUnknown()) {
+            return true;
+        }
+        if (current.isOpaqueExternal()) {
+            reportError(node, "`" + type.describe() + "` cannot be used in " + std::string(context) +
+                " because Anchor[T] requires a concrete owned payload, not an opaque external value.");
+            return false;
+        }
+        if (current.isView()) {
+            reportError(node, "`" + type.describe() + "` cannot be used in " + std::string(context) +
+                " because Anchor[T] requires an owned payload. Store an owned value instead of `" + current.describe() + "`.");
+            return false;
+        }
+        if (current.name == "Span") {
+            reportError(node, "`" + type.describe() + "` cannot be used in " + std::string(context) +
+                " because Anchor[T] cannot hold Span[T]. Keep the Span borrow local or store the owned collection instead.");
+            return false;
+        }
+        if (isRawAddressType(current)) {
+            reportError(node, "`" + type.describe() + "` cannot be used in " + std::string(context) +
+                " because Anchor[T] cannot hold raw address types.");
+            return false;
+        }
+        for (const auto& param : current.params) {
+            if (!self(self, param)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    if (type.name != "Anchor") {
+        return true;
+    }
+    if (type.params.size() != 1) {
+        reportError(node, "Anchor[T] requires exactly one payload type.");
+        return false;
+    }
+    return validateNested(validateNested, type.params.front());
+}
 const Symbol* SemanticAnalyzer::resolveBorrowSourceSymbol(const Expr* expr) const {
     if (!expr) {
         return nullptr;
@@ -1074,7 +1116,11 @@ bool SemanticAnalyzer::validateOwnedLayoutDependency(
 ResolvedType SemanticAnalyzer::resolveTypeNode(
     const TypeNode* node,
     const std::unordered_set<std::string>& localTypeParams) {
-    return typeCatalog.resolveType(node, localTypeParams, &diagnostics);
+    ResolvedType type = typeCatalog.resolveType(node, localTypeParams, &diagnostics);
+    if (node) {
+        validateAnchorPayloadType(type, node, "type positions");
+    }
+    return type;
 }
 
 std::unordered_map<std::string, ResolvedType> SemanticAnalyzer::buildTypeBindingsChecked(
@@ -2150,12 +2196,36 @@ ResolvedType SemanticAnalyzer::analyzeExpr(Expr* expr, const ResolvedType* expec
                 if (auto* objectIdent = dynamic_cast<IdentExpr*>(member->object.get())) {
                     if (objectIdent->name == "Anchor" && member->member == "new") {
                         if (call->args.size() != 1) {
-                            reportError(call, "Constructor 'Anchor.new' expects 1 argument.");
+                            reportError(call, "Constructor 'Anchor.new' expects exactly 1 argument.");
                         } else {
-                            const ResolvedType argType = analyzeExpr(call->args[0].get());
+                            const ResolvedType* payloadExpectedType =
+                                (expectedType && expectedType->name == "Anchor" && expectedType->params.size() == 1)
+                                    ? &expectedType->params.front()
+                                    : nullptr;
+                            ResolvedType payloadType = analyzeExpr(call->args[0].get(), payloadExpectedType);
+                            payloadType = normalizeInferredLiteralType(payloadType);
+                            if (isNumericLiteralType(payloadType)) {
+                                analysisResult.exprTypes[call->args[0].get()] = payloadType;
+                            }
+
                             ResolvedType anchorType = makeOwnedType("Anchor");
-                            anchorType.params.push_back(argType);
-                            type = anchorType;
+                            if (payloadExpectedType) {
+                                anchorType.params.push_back(*payloadExpectedType);
+                                if (!canAssignType(payloadType, *payloadExpectedType)) {
+                                    reportError(
+                                        call->args[0].get(),
+                                        "Anchor.new payload type mismatch: expected " + payloadExpectedType->describe() +
+                                            ", got " + payloadType.describe());
+                                }
+                            } else {
+                                anchorType.params.push_back(payloadType);
+                            }
+
+                            if (!validateAnchorPayloadType(anchorType, call, "Anchor.new payloads")) {
+                                type = makeUnknownType();
+                            } else {
+                                type = anchorType;
+                            }
                             analysisResult.exprTypes[expr] = type;
                             return type;
                         }
@@ -2620,6 +2690,10 @@ bool SemanticAnalyzer::stmtDefinitelyTerminates(const Stmt* stmt) const {
 }
 
 } // namespace claw::frontend
+
+
+
+
 
 
 

@@ -22,7 +22,9 @@ mkdir -p "$ARTIFACT_DIR"
 result_ll="$ARTIFACT_DIR/revise_result_llvm.ll"
 maybe_ll="$ARTIFACT_DIR/revise_maybe.ll"
 scope_ll="$ARTIFACT_DIR/revise_scope_refs.ll"
-rm -f "$result_ll" "$maybe_ll" "$scope_ll"
+anchor_ll="$ARTIFACT_DIR/revise_anchor.ll"
+anchor_choice_ll="$ARTIFACT_DIR/revise_anchor_choice.ll"
+rm -f "$result_ll" "$maybe_ll" "$scope_ll" "$anchor_ll" "$anchor_choice_ll"
 
 echo "[llvm/pass] test_backend/revise_result_llvm.cat"
 "$CLAW_EXE" llvm "$ROOT_DIR/test_backend/revise_result_llvm.cat" > "$result_ll"
@@ -51,3 +53,25 @@ if [[ "$scope_output" != *'define internal void @"revise_scope_refs::main"'* ]] 
   exit 1
 fi
 llvm-as "$scope_ll" -o /dev/null
+
+echo "[llvm/pass] test_backend/revise_anchor.cat"
+"$CLAW_EXE" llvm "$ROOT_DIR/test_backend/revise_anchor.cat" > "$anchor_ll"
+anchor_output="$(tr -d '\r' < "$anchor_ll")"
+if [[ "$anchor_output" != *'@"claw.runtime.anchor.alloc"'* ]] ||
+   [[ "$anchor_output" != *'@"claw.runtime.anchor.free"'* ]] ||
+   [[ "$anchor_output" != *'@"claw.runtime.println.slice"'* ]]; then
+  echo "revised anchor LLVM output did not include the expected anchor lowering markers" >&2
+  exit 1
+fi
+llvm-as "$anchor_ll" -o /dev/null
+
+echo "[llvm/pass] test_backend/revise_anchor_choice.cat"
+"$CLAW_EXE" llvm "$ROOT_DIR/test_backend/revise_anchor_choice.cat" > "$anchor_choice_ll"
+anchor_choice_output="$(tr -d '\r' < "$anchor_choice_ll")"
+if [[ "$anchor_choice_output" != *'@"claw.runtime.anchor.alloc"'* ]] ||
+   [[ "$anchor_choice_output" != *'@"claw.runtime.anchor.free"'* ]] ||
+   [[ "$anchor_choice_output" != *'switch i32'* ]]; then
+  echo "revised anchor-choice LLVM output did not include the expected choice + anchor lowering markers" >&2
+  exit 1
+fi
+llvm-as "$anchor_choice_ll" -o /dev/null

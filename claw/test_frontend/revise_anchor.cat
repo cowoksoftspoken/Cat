@@ -1,0 +1,13 @@
+shape Cache {
+    stored: Anchor[Str]
+}
+
+fn borrow(anchor: ref Anchor[Str]) -> ref Str {
+    anchor.get()
+}
+
+fn main() {
+    val stable = Anchor.new("anchor")
+    val text = borrow(ref stable)
+    println(text)
+}

@@ -1,4 +1,4 @@
-#include "module/project.h"
+#include "workspace/workspace.h"
 
 #include "diagnostics/diagnostics.h"
 
@@ -8,7 +8,9 @@
 #include <string_view>
 #include <unordered_set>
 
-namespace claw::frontend {
+namespace claw::workspace {
+
+using namespace claw::frontend;
 
 namespace {
 
@@ -569,4 +571,4 @@ ProjectConfig ProjectLoader::loadProjectConfig(const std::filesystem::path& path
     return config;
 }
 
-} // namespace claw::frontend
+} // namespace claw::workspace

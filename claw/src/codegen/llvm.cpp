@@ -1,6 +1,6 @@
-#include "backend/llvm_internal.h"
+#include "codegen/llvm_internal.h"
 
-namespace claw::frontend {
+namespace claw::codegen {
 
 std::string emitLlvmIr(const LirProgram& program) {
     return LlvmEmitter(program).emit();
@@ -18,4 +18,4 @@ std::string emitNativeLlvmIr(std::string_view entryRealm, const std::vector<OirU
     return emitNativeLlvmIr(buildLirProgram(entryRealm, units));
 }
 
-} // namespace claw::frontend
+} // namespace claw::codegen

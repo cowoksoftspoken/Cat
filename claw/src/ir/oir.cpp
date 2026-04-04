@@ -415,6 +415,19 @@ OirValue lowerExpr(
             return OirValue{result, exprType(sema, expr), false};
         }
 
+        std::string callee;
+        if (auto* memberCallee = dynamic_cast<const MemberExpr*>(call->callee.get())) {
+            if (sema.lookupMethodSignature(call->callee.get()).has_value() &&
+                !dynamic_cast<const IdentExpr*>(memberCallee->object.get())) {
+                const OirValue receiver = lowerExpr(sema, memberCallee->object.get(), context, blockIndex);
+                callee = receiver.text + "." + memberCallee->member;
+            } else {
+                callee = calleeText(call->callee.get());
+            }
+        } else {
+            callee = calleeText(call->callee.get());
+        }
+
         std::vector<OirValue> args;
         args.reserve(call->args.size());
         for (const auto& arg : call->args) {
@@ -422,7 +435,6 @@ OirValue lowerExpr(
         }
 
         const std::string type = exprType(sema, expr);
-        const std::string callee = calleeText(call->callee.get());
         const auto callExternalInfo = externalCallInfo(sema, call, callee, type);
         if (type == "Unit") {
             appendInst(context, blockIndex, OirCallInst{std::nullopt, callee, std::move(args), type, callExternalInfo});
@@ -1117,3 +1129,6 @@ std::string emitOirProgram(std::string_view entryRealm, const std::vector<OirUni
 }
 
 } // namespace claw::frontend
+
+
+
