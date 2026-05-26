@@ -662,6 +662,8 @@ ProjectLoader::ExportSummary ProjectLoader::buildExportSummary(const LoadedUnit&
             binding.kind = SymbolKind::Shape;
 
             ShapeInfo info;
+            info.isViewShape = shape->isViewShape;
+            info.scopeParamName = shape->scopeParamName;
             info.typeParams = shape->typeParams;
             std::unordered_set<std::string> localTypeParams(shape->typeParams.begin(), shape->typeParams.end());
             for (const auto& field : shape->fields) {

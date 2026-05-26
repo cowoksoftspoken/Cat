@@ -1,0 +1,6 @@
+fn main() {
+    val text = "hello"
+    val prefix = text.slice(0, 2)
+    val bad = Anchor.new(prefix)
+    println(bad.get())
+}

@@ -79,6 +79,29 @@ if [[ "$bad_try_var_output" != *'`try` bindings currently require `val`.'* ]]; t
   exit 1
 fi
 
+echo "[check/fail] test/revise_bad_unused_result.cat"
+if bad_unused_result_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_unused_result.cat" 2>&1)"; then
+  echo "expected revise_bad_unused_result to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$bad_unused_result_output" != *'Unused Result['* ]]; then
+  echo "revise_bad_unused_result did not report the must-use Result rule" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/revise_bad_unused_maybe.cat"
+if bad_unused_maybe_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_unused_maybe.cat" 2>&1)"; then
+  echo "expected revise_bad_unused_maybe to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$bad_unused_maybe_output" != *'Unused Maybe['* ]]; then
+  echo "revise_bad_unused_maybe did not report the must-use Maybe rule" >&2
+  exit 1
+fi
+
+echo "[check/pass] test/revise_ignore_must_use.cat"
+"$CLAW_EXE" check "$ROOT_DIR/test/revise_ignore_must_use.cat"
+
 echo "[check/pass] test/revise_maybe.cat"
 "$CLAW_EXE" check "$ROOT_DIR/test/revise_maybe.cat"
 
@@ -89,6 +112,81 @@ if [[ "$revise_maybe_air_output" != *"choice Maybe"* ]] ||
    [[ "$revise_maybe_air_output" != *"None"* ]] ||
    [[ "$revise_maybe_air_output" != *"pick"* ]]; then
   echo "revise_maybe AIR did not reflect the Maybe[T] choice surface" >&2
+  exit 1
+fi
+
+echo "[check/pass] test/revise_anchor.cat"
+"$CLAW_EXE" check "$ROOT_DIR/test/revise_anchor.cat"
+
+echo "[check/pass] test/revise_view_shape_scope.cat"
+"$CLAW_EXE" check "$ROOT_DIR/test/revise_view_shape_scope.cat"
+
+echo "[air/pass] test/revise_view_shape_scope.cat"
+revise_view_shape_air_output="$("$CLAW_EXE" air "$ROOT_DIR/test/revise_view_shape_scope.cat")"
+if [[ "$revise_view_shape_air_output" != *"air.view_shape Parser[s]"* ]] ||
+   [[ "$revise_view_shape_air_output" != *"scope s"* ]] ||
+   [[ "$revise_view_shape_air_output" != *"Parser {input: ref[s] source"* ]]; then
+  echo "revise_view_shape_scope AIR did not reflect the view-shape scoped-borrow surface" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/revise_bad_shape_ref_field.cat"
+if bad_shape_ref_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_shape_ref_field.cat" 2>&1)"; then
+  echo "expected revise_bad_shape_ref_field to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$bad_shape_ref_output" != *"shape 'Cache' cannot store borrowed field 'stored'"* ]]; then
+  echo "revise_bad_shape_ref_field did not report the borrowed shape-field rule" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/revise_bad_shape_nested_ref_field.cat"
+if bad_shape_nested_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_shape_nested_ref_field.cat" 2>&1)"; then
+  echo "expected revise_bad_shape_nested_ref_field to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$bad_shape_nested_output" != *"shape 'Node' cannot store borrowed field 'next'"* ]]; then
+  echo "revise_bad_shape_nested_ref_field did not report the nested borrowed shape-field rule" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/revise_bad_view_shape_scope_field.cat"
+if bad_view_shape_scope_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_view_shape_scope_field.cat" 2>&1)"; then
+  echo "expected revise_bad_view_shape_scope_field to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$bad_view_shape_scope_output" != *"must use the declared scope 's'"* ]]; then
+  echo "revise_bad_view_shape_scope_field did not report the declared-scope rule for view shapes" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/revise_bad_view_shape_escape.cat"
+if bad_view_shape_escape_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_view_shape_escape.cat" 2>&1)"; then
+  echo "expected revise_bad_view_shape_escape to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$bad_view_shape_escape_output" != *"Cannot return value \`Parser[s]\` because it is bound to scope \`s\`."* ]]; then
+  echo "revise_bad_view_shape_escape did not report scoped aggregate escape" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/revise_bad_anchor_view_payload.cat"
+if bad_anchor_payload_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_anchor_view_payload.cat" 2>&1)"; then
+  echo "expected revise_bad_anchor_view_payload to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$bad_anchor_payload_output" != *"Anchor.new(...) requires an owned payload with stable ownership."* ]]; then
+  echo "revise_bad_anchor_view_payload did not report the Anchor payload ownership rule" >&2
+  exit 1
+fi
+
+echo "[check/fail] test/revise_bad_anchor_return_local.cat"
+if bad_anchor_return_output="$("$CLAW_EXE" check "$ROOT_DIR/test/revise_bad_anchor_return_local.cat" 2>&1)"; then
+  echo "expected revise_bad_anchor_return_local to fail, but it passed" >&2
+  exit 1
+fi
+if [[ "$bad_anchor_return_output" != *"Returned ref value must come from one of the function's ref parameters."* ]]; then
+  echo "revise_bad_anchor_return_local did not report the local Anchor escape rule" >&2
   exit 1
 fi
 

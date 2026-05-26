@@ -139,6 +139,7 @@ struct OirCallInst {
     std::string callee;
     std::vector<OirValue> args;
     std::string type;
+    std::optional<std::string> builtinTag;
     std::optional<OirExternalCallInfo> externalInfo;
 };
 
@@ -193,6 +194,8 @@ struct OirFunction {
 
 struct OirShape {
     std::string name;
+    bool isViewShape = false;
+    std::string scopeParamName;
     std::vector<std::string> typeParams;
     std::vector<OirShapeField> fields;
     SymbolLinkInfo linkage;

@@ -1,0 +1,12 @@
+view shape Parser[s] {
+    current: ref[s] Str,
+}
+
+fn leak() -> Parser {
+    val source = "hello"
+    scope s {
+        return Parser { current: ref[s] source }
+    }
+}
+
+fn main() {}

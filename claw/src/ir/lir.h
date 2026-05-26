@@ -164,6 +164,7 @@ struct LirCallInst {
     std::string callee;
     std::vector<LirValue> args;
     std::string type;
+    std::optional<std::string> builtinTag;
     LirCallKind kind = LirCallKind::Direct;
     LirSafetyTag safety = LirSafetyTag::None;
     std::string hook;
@@ -231,6 +232,8 @@ struct LirFunction {
 
 struct LirShape {
     std::string name;
+    bool isViewShape = false;
+    std::string scopeParamName;
     std::vector<std::string> typeParams;
     std::vector<LirShapeField> fields;
     SymbolLinkInfo linkage;

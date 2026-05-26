@@ -193,6 +193,45 @@ bool LlvmEmitter::emitLift(const LirLiftInst& value, FunctionState& state, std::
 }
 
 void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state, std::vector<std::string>& lines) {
+    const std::string builtinTag = value.builtinTag.value_or(tailSegment(value.callee));
+    if (builtinTag == "Anchor.new") {
+        if (value.args.size() != 1) {
+            throw std::runtime_error("LLVM lowering expected one argument for Anchor.new.");
+        }
+        if (!value.result.has_value()) {
+            return;
+        }
+
+        const ParsedTypeName anchorType = parseTypeName(value.type);
+        if (anchorType.base != "Anchor" || anchorType.args.size() != 1) {
+            throw std::runtime_error("LLVM lowering expected Anchor[T] result type for Anchor.new, got '" + value.type + "'.");
+        }
+
+        const std::string payloadType = anchorType.args.front();
+        const auto payloadLayout = abiLayoutForType(payloadType);
+        if (!payloadLayout.has_value()) {
+            throw std::runtime_error("LLVM lowering does not yet support Anchor payload type '" + payloadType + "'.");
+        }
+
+        const std::string allocSymbol = quoteGlobal("claw.runtime.anchor.alloc");
+        addRuntimeDecl("declare ptr " + allocSymbol + "(i64)");
+
+        const std::string allocReg = state.temp("anchor.alloc");
+        const size_t payloadBytes = std::max<size_t>(payloadLayout->size, 1);
+        lines.push_back("  " + allocReg + " = call ptr " + allocSymbol + "(i64 " + std::to_string(payloadBytes) + ")");
+
+        if (payloadLayout->size > 0 && llvmType(payloadType) != "void") {
+            const std::string operand = ensureValue(value.args.front(), state, lines);
+            storeValueToAddress(allocReg, payloadType, operand, payloadLayout->align, lines);
+        }
+
+        state.namedValues[*value.result] = allocReg;
+        state.namedAddresses.erase(*value.result);
+        state.params.erase(*value.result);
+        state.valueTypes[*value.result] = value.type;
+        return;
+    }
+
     const std::string receiverName = receiverSegment(value.callee);
     if (receiverName.empty()) {
         throw std::runtime_error("LLVM lowering expected a builtin receiver for '" + value.callee + "'.");
@@ -204,7 +243,7 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
     }
 
     const std::string receiverValue = ensureNamedValue(receiverName, state, lines);
-    const std::string methodName = tailSegment(value.callee);
+    const std::string methodName = tailSegment(builtinTag);
     const std::string baseType = canonicalBackendTypeBase(stripGenericArgs(stripViewPrefix(receiverType)));
     const auto storeResultType = [&]() {
         if (value.result.has_value()) {
@@ -212,7 +251,24 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
         }
     };
 
-    if (baseType == "Str" && methodName == "len") {
+    if (builtinTag == "Anchor.get") {
+        if (!value.result.has_value()) {
+            return;
+        }
+
+        const ParsedTypeName anchorType = parseTypeName(receiverType);
+        if (anchorType.base != "Anchor" || anchorType.args.size() != 1) {
+            throw std::runtime_error("LLVM lowering expected Anchor[T] receiver type for Anchor.get, got '" + receiverType + "'.");
+        }
+
+        state.namedAddresses[*value.result] = receiverValue;
+        state.namedValues.erase(*value.result);
+        state.params.erase(*value.result);
+        state.valueTypes[*value.result] = value.type;
+        return;
+    }
+
+    if (builtinTag == "Str.len" || (baseType == "Str" && methodName == "len")) {
         if (!value.result.has_value()) {
             return;
         }
@@ -223,7 +279,7 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
         return;
     }
 
-    if (baseType == "Str" && methodName == "is_empty") {
+    if (builtinTag == "Str.is_empty" || (baseType == "Str" && methodName == "is_empty")) {
         if (!value.result.has_value()) {
             return;
         }
@@ -234,7 +290,7 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
         return;
     }
 
-    if (baseType == "Str" && methodName == "byte_at") {
+    if (builtinTag == "Str.byte_at" || (baseType == "Str" && methodName == "byte_at")) {
         if (value.args.size() != 1) {
             throw std::runtime_error("LLVM lowering expected one argument for text.byte_at.");
         }
@@ -250,7 +306,7 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
         return;
     }
 
-    if (baseType == "Str" && methodName == "first_byte") {
+    if (builtinTag == "Str.first_byte" || (baseType == "Str" && methodName == "first_byte")) {
         if (!value.result.has_value()) {
             return;
         }
@@ -260,7 +316,7 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
         return;
     }
 
-    if (baseType == "Str" && methodName == "last_byte") {
+    if (builtinTag == "Str.last_byte" || (baseType == "Str" && methodName == "last_byte")) {
         if (!value.result.has_value()) {
             return;
         }
@@ -275,7 +331,7 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
         return;
     }
 
-    if (baseType == "Str" && methodName == "slice") {
+    if (builtinTag == "Str.slice" || (baseType == "Str" && methodName == "slice")) {
         if (value.args.size() != 2) {
             throw std::runtime_error("LLVM lowering expected two arguments for text.slice.");
         }
@@ -294,7 +350,6 @@ void LlvmEmitter::emitBuiltinCall(const LirCallInst& value, FunctionState& state
         return;
     }
 
-    throw std::runtime_error("LLVM lowering does not yet support builtin method '" + value.callee + "'.");
+    throw std::runtime_error("LLVM lowering does not yet support builtin method '" + builtinTag + "'.");
 }
-
 } // namespace claw::frontend

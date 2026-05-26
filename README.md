@@ -1,742 +1,319 @@
 # C@
 
-C@ is a systems programming language designed around one slogan:
+C@ is an in-progress systems programming language and compiler built around one design promise:
 
 **Fast, Safe, Simple**
 
-- **Fast** means native performance, predictable cost, no hidden GC, and no invisible allocation model.
-- **Safe** means memory safety is the default in safe code through ownership, views, definite initialization, explicit failure handling, and explicit `raw` boundaries.
-- **Simple** means the surface syntax stays smaller and easier to reason about than Rust. The language avoids lifetime syntax, avoids punctuation-heavy rituals, and keeps control flow explicit.
+- **Fast**: native code generation, explicit costs, no hidden GC, and predictable control over data layout and ownership.
+- **Safe**: ownership, borrowing, typed error handling, explicit unsafe boundaries, and a compiler that aims to prevent memory misuse in safe code.
+- **Simple**: a smaller, clearer surface than traditional systems languages, with familiar syntax and fewer user-facing rules.
 
-This README describes the intended **language surface**. The compiler implementation lives in [`claw/`](./claw).
+This repository contains the language project at the workspace root and the compiler implementation in [`claw/`](./claw).
 
-## Status
+## Project Status
 
-The syntax below is the current language direction.
+C@ is under active language and compiler development. The current compiler already supports a meaningful revised surface and can:
 
-Some parts are already implemented in the compiler frontend and initial LLVM backend. Some parts are still design targets. This document describes the intended user-facing language, not only the subset already compiled today.
+- parse, type-check, and borrow-check revised C@ source
+- lower to internal AIR, OIR, and LIR stages
+- emit LLVM IR
+- build native `.exe` programs for the currently supported subset
+- run revised frontend, backend, and native test suites
 
-## Core Ideas
+The project is **not feature-complete yet**. The language surface below reflects the intended revised direction, with emphasis on the parts that are already implemented or actively being hardened.
 
-C@ is built around a few rules:
+## Design Direction
 
-- one obvious function syntax: `fn name(args) -> Type { ... }`
-- one obvious block syntax: braces
-- `hold` for immutable local bindings
-- `slot` for mutable storage
-- `look` and `edit` for safe views
-- `pick` for tagged-union branching
-- `lift` for explicit success-or-failure extraction
-- `raw` for unsafe or foreign boundaries
-- `realm` plus explicit `import` for module structure
+C@ is targeting production-grade systems programming with these principles:
 
-## File Model
+- default-safe ownership and borrowing
+- explicit escape hatches such as `raw` and `foreign c`
+- strong module boundaries and deterministic workspaces
+- readable, familiar syntax with minimal ceremony
+- an implementation strategy that stays compatible with native code generation and LLVM-backed compilation
 
-Every source file is a `.cat` file and belongs to one `realm`.
+## Current Surface Overview
 
-```cat
-realm app.main
-```
-
-A workspace has a fixed root entry file:
-
-```text
-main.cat
-claw.toml
-```
-
-`main.cat` is special. It is the workspace entry source and the root workspace does not need `modules.cat`.
-
-## Comments
-
-Single-line comments use `//`.
+### Bindings
 
 ```cat
-// this is a comment
-hold port: Int32 = 8080
+val host = "127.0.0.1"
+var total = 0
 ```
 
-## Bindings And Assignment
+- `val` creates an immutable binding.
+- `var` creates a mutable binding.
 
-### Immutable binding
-
-```cat
-hold host: Text = "127.0.0.1"
-hold limit = 64
-```
-
-### Mutable storage
-
-```cat
-slot total: Int32 = 0
-slot index = 0
-```
-
-### Assignment
-
-```cat
-total = total + 1
-index = index + 1
-```
-
-Rules:
-- `hold` creates an immutable local binding.
-- `slot` creates mutable storage.
-- assignment targets mutable storage, not immutable bindings.
-- a moved-out `slot` must be reinitialized before it can be read again.
-
-## Functions
-
-### Function declaration
+### Functions
 
 ```cat
 fn add(left: Int32, right: Int32) -> Int32 {
-    give left + right
+    left + right
 }
-```
 
-### Unit-returning function
-
-```cat
-fn greet(name: look Text) {
+fn greet(name: ref Str) {
     println(name)
 }
 ```
 
-### Return
+- `fn` declares a function.
+- The last expression in a block can be used as the return value.
+- `return` is still available when explicit early exit is needed.
+- `fn main()` may return `Unit` implicitly or explicitly, and `fn main() -> Int32` is also allowed for OS exit codes.
+
+### Borrowing
 
 ```cat
-give value
-give
-```
+fn inspect(text: ref Str) {
+    println(text)
+}
 
-Rules:
-- `fn` is mandatory.
-- parameters use `name: Type`.
-- the return type is optional only for `Unit`.
-- the current design keeps function syntax explicit and compact.
-
-## Conditionals
-
-```cat
-when size > 0 {
-    give size
-} otherwise {
-    give 0
+fn clear(items: ref mut Vec[Int32]) {
+    items.clear()
 }
 ```
 
-Rules:
-- `when` is the conditional form.
-- `otherwise` is the alternative branch.
-- conditions are explicit expressions.
-- there is no hidden propagation or implicit control transfer.
+- `ref T` is a read-only borrow.
+- `ref mut T` is a mutable borrow.
+- Lifetimes are implicit; diagnostics are intended to teach without exposing lifetime syntax.
 
-## Loops
-
-### Conditional loop
+### Control Flow
 
 ```cat
-loop index < limit {
-    index = index + 1
+if total > 0 {
+    println("positive")
+} else {
+    println("zero")
 }
-```
 
-### Infinite loop
-
-```cat
 loop {
-    work()
+    stop
+}
+
+scan item over values {
+    println(item)
 }
 ```
 
-### Iteration
+- `if` / `else` handle branching.
+- `loop` supports conditional and unconditional looping.
+- `scan` iterates over collections and other iterable values.
+- `stop` and `skip` control loop flow.
 
-```cat
-scan item over data {
-    total = total + item
-}
-```
+### Data Types
 
-### Loop control
+Current revised direction:
 
-```cat
-stop
-skip
-```
+- Integers: `Int8`, `Int16`, `Int32`, `Int64`, `Int128`
+- Unsigned: `UInt8`, `UInt16`, `UInt32`, `UInt64`, `UInt128`
+- Floating point: `Float32`, `Float64`, `Float128`
+- Aliases: `Int`, `UInt`, `Float`
+- Other core types: `Bool`, `Char`, `Str`, `USize`, `Unit`
 
-Rules:
-- `loop condition {}` is the while-form.
-- `loop {}` is the infinite form.
-- `scan` is the iteration form.
-- `stop` exits the nearest loop.
-- `skip` advances to the next iteration.
-
-## Shapes
-
-A `shape` is a nominal record type.
+### Structured Data
 
 ```cat
 shape Config {
-    share host: Text
+    share host: Str
     share port: Int32
 }
-```
 
-Rules:
-- `shape` defines a record-like data type.
-- `share` exposes a field or item outside the defining realm.
-- mutability is controlled by the view used to access the value, not by special field mutability syntax.
-
-### Shape construction
-
-```cat
-fn default_config() -> Config {
-    give Config(host: "127.0.0.1", port: 8080)
+choice Result[T, E] {
+    Ok(value: T)
+    Fail(cause: E)
 }
 ```
 
-### Field access
+- `shape` defines nominal record types.
+- normal `shape` values cannot store borrowed fields such as `ref T`, `ref mut T`, or nested borrowed storage like `Maybe[ref T]`. Use owned fields, `Anchor[T]`, or `view shape[s]` when the aggregate itself is intentionally scope-bound.
+- `choice` defines tagged unions.
+- Generics use `[]`.
+
+### Pattern Dispatch
 
 ```cat
-fn inspect(cfg: Config) -> Int32 {
-    give cfg.port
-}
-```
-
-## Choices
-
-A `choice` is a tagged union.
-
-```cat
-choice Maybe of T {
-    none
-    some(value: T)
-}
-```
-
-```cat
-choice Signal {
-    ready
-    failed(code: Int32)
-}
-```
-
-Rules:
-- each variant has a unique tag.
-- payload names are local to matching branches and constructors.
-- generic choices use `of`.
-
-## Variant Dispatch With `pick`
-
-```cat
-fn show(value: Maybe of Int32) {
-    pick value {
-        none {
-            println("empty")
-        }
-        some(v) {
-            print(v)
-        }
+pick result {
+    Ok(value) {
+        println(value)
+    }
+    Fail(err) {
+        println(err)
     }
 }
 ```
 
+`pick` is the primary form for explicit choice dispatch.
+
+### Error Handling
+
 ```cat
-fn unwrap(signal: Signal) -> Int32 {
-    pick signal {
-        ready {
-            give 0
-        }
-        failed(code) {
-            give code
-        }
-    }
+val file = try fs.open(path)
+
+val text = try fs.read(path) else err {
+    println(err)
+    return Fail(err)
 }
+```
+
+- `Result[T, E]` models recoverable failure.
+- `Maybe[T]` models optional values.
+- `Result[T, E]` and `Maybe[T]` are must-use in the current compiler. Ignoring them as bare statements is rejected; handle them, bind them, or explicitly discard them.
+- `try expr` propagates failure when the current function also returns `Result`.
+- `try expr else err { ... }` handles failure locally.
+
+### Workspace Model
+
+A revised workspace uses a fixed root entry file and explicit published modules.
+
+```text
+my-app/
+  main.cat
+  claw.toml
+  src/
+    modules.cat
+    math.cat
+    util.cat
 ```
 
 Rules:
-- `pick` is the variant-dispatch form.
-- patterns are explicit and local.
-- exhaustiveness is required for closed choices.
 
-## Error Handling With `Outcome`
-
-Recoverable failure is expressed with `Outcome of T, E`.
-
-```cat
-choice Outcome of T, E {
-    ok(value: T)
-    fail(cause: E)
-}
-```
-
-### Explicit lift
-
-```cat
-lift expression as value fail issue {
-    failure_block
-}
-```
-
-Meaning:
-- if the result is `ok(v)`, bind `value = v` and continue.
-- if the result is `fail(e)`, bind `issue = e`, run the fail block, and the fail path must leave the current flow explicitly.
+- `main.cat` is required at the workspace root.
+- exactly one `fn main` is required inside `main.cat`.
+- `main.cat` is entry-only and cannot be imported as a normal module.
+- `fn main` is not a normal callable function surface for user code.
+- non-root folders use `modules.cat` to publish outward-facing modules.
+- imports are path-based and explicit.
 
 Example:
 
 ```cat
-fn read_text(path: look Text) -> Outcome of Text, ReadFault {
-    lift fs.open_text(path) as file fail issue {
-        give fail(map_fault(issue))
-    }
-
-    give ok(fs.read_all(file))
-}
+import src.math.{ add }
+import super.{ util }
 ```
 
-This keeps failure flow explicit, typed, and easy to audit.
-
-## Ownership, Views, And Mutation
-
-C@ distinguishes owned values from safe views.
-
-### Read-only view
-
-```cat
-fn size(text: look Text) -> USize {
-    give text.len()
-}
-```
-
-### Mutable view
-
-```cat
-fn clear_bytes(bytes: edit Bytes) {
-    bytes.clear()
-}
-```
-
-Rules:
-- `look T` is a read-only view.
-- `edit T` is a mutable view.
-- safe code must respect borrow rules.
-- moving an owned value while it is still viewed is rejected.
-- returning invalid escaping views is rejected.
-
-## Builtin Method Dispatch
-
-Builtin methods are resolved statically and remain cost-visible.
-
-Examples:
-
-```cat
-text.len()
-text.is_empty()
-text.byte_at(0)
-text.slice(0, 2)
-bytes.reserve(64)
-bytes.clear()
-items.capacity()
-```
-
-The intent is compile-time method dispatch on known core types, not hidden dynamic dispatch.
-
-## `raw` Blocks
-
-Unsafe or foreign operations must be isolated inside `raw`.
+### Unsafe and Foreign Boundaries
 
 ```cat
 raw {
     emit("boot")
 }
+
+foreign c {
+    fn puts(text: ref Str) -> Int32
+}
 ```
 
-Rules:
 - safe code is the default.
-- raw pointers, foreign calls, and unsafe boundaries must be explicit.
-- `raw` is meant to be auditable and contained.
+- `raw` isolates unsafe operations.
+- `foreign c` is the intended foreign boundary for C interoperability.
 
-## Prelude Output
+### Stable Reference Helpers
 
-`print` and `println` are prelude builtins.
-
-```cat
-print(value)
-println("hello")
-```
-
-No explicit import is required for them.
-
-## Realms, Modules, And Imports
-
-This is the core modularization model of C@.
-
-### What a `realm` is
-
-A `realm` is the canonical module identity of a source file.
-
-It has four jobs at once:
-- it gives the file its logical name
-- it defines the namespace for the items declared inside the file
-- it acts as a visibility boundary
-- it gives the compiler a stable unit for import resolution and dependency graphs
-
-Examples:
+The revised model also includes explicit stabilization tools for complex ownership scenarios.
 
 ```cat
-realm main
-realm src.api
-realm src.runtime
+val stable = Anchor.new("hello")
+println(stable.get())
 ```
 
-In a structured workspace, the realm should match the file path:
-- `main.cat` -> `realm main`
-- `src/api.cat` -> `realm src.api`
-- `src/runtime.cat` -> `realm src.runtime`
+Current implementation status:
 
-This is intentional. It keeps the module graph explicit, deterministic, and easy to navigate.
+- `Anchor.new(value)` is implemented for owned payloads with stable ownership.
+- `anchor.get()` yields `ref T`.
+- `scope` and scoped refs are implemented in the current compiler wave.
+- local borrowed aggregate carriers via `view shape Name[s] { ... }` are implemented, including scope-bound construction and escape checks.
+- `Arena` is still part of the design direction and is not yet fully implemented.
+- broader scoped-type propagation in arbitrary signatures and more advanced lifetime helpers are still being hardened.
 
-### What `share` does
-
-Items are private to their realm by default.
-
-`share` exports an item from that realm so other realms may import it.
+## Example Program
 
 ```cat
-realm src.api
-
-share shape Config {
-    share port: Int32
-}
-
-share fn add(base: Int32, extra: Int32) -> Int32 {
-    give base + extra
-}
-
-fn helper() -> Int32 {
-    give 7
-}
-```
-
-In that example:
-- `Config` is public to other realms
-- `add` is public to other realms
-- `helper` stays private to `src.api`
-
-So `share` is item-level visibility.
-
-### What `modules.cat` does
-
-`modules.cat` is not the same as `share`.
-
-- `share` publishes items from one file/realm.
-- `modules.cat` publishes which files or child folders in a non-root directory may be reached from outside that directory.
-
-Example:
-
-```cat
-pub modules {api, runtime, util}
-```
-
-If this file lives at `src/modules.cat`, it means outer code is allowed to reach:
-- `src.api`
-- `src.runtime`
-- `src.util`
-
-Without that `modules.cat`, or without those names listed, code outside `src/` should not be able to traverse into those modules even if the files physically exist.
-
-So `modules.cat` is folder-level publishing.
-
-### Root workspace rule
-
-The root workspace is special.
-
-It uses:
-- `main.cat` as the fixed entry source
-- `fn main()` or `fn main() -> Int32` as the entry function
-
-The root workspace does **not** need `modules.cat`.
-
-That means:
-- root entry is always clear
-- the top-level package stays structured without extra boilerplate
-- folder publishing is only needed when crossing non-root directory boundaries
-
-### Import forms
-
-C@ keeps imports explicit and small.
-
-#### Import shared items from a realm
-
-```cat
-import src.api.{Config, Signal, add}
-```
-
-Use this when you want specific public items from another realm.
-
-#### Import a module name
-
-```cat
-import src.{runtime}
-```
-
-Use this when you want to call shared items through the module path, for example:
-
-```cat
-runtime.banner()
-```
-
-#### Import a sibling module
-
-```cat
-import super.{util}
-```
-
-This is the short form for importing a sibling module from the same folder module space.
-
-Its job is to avoid repeating the full realm path when two files live side by side.
-
-Example idea:
-- current file is in the same folder as `util.cat`
-- `import super.{util}` brings that sibling module into scope
-- later code can call `util.answer()`
-
-#### Import from a dependency root
-
-```cat
-import term.{emit}
-```
-
-This is for external package roots declared in `claw.toml`.
-
-The dependency root must exist in `[dependencies]`, and its imported surface is defined by the package contract. For typed external functions, that contract may also carry ABI and safety information.
-
-### What an `import` really does
-
-An import is not just a text include.
-
-Its job is to say:
-- which external realm or module boundary this file depends on
-- which public names become available in this scope
-- which package or folder boundary is being crossed
-- what symbols the compiler must resolve and type-check
-
-This explicitness matters for all three goals:
-- `Fast`: the compiler gets a stable, cacheable dependency graph
-- `Safe`: boundaries are visible and auditable
-- `Simple`: there is one obvious import model instead of hidden discovery rules
-
-### Visibility and traversal rules
-
-The intended model is:
-- private by default
-- `share` exports items from a realm
-- imports only see shared items
-- `modules.cat` publishes non-root child modules outward
-- root `main.cat` is special and does not need `modules.cat`
-- sibling imports use `super.{...}`
-- dependency imports come from roots declared in `claw.toml`
-
-### End-to-end example
-
-Project tree:
-
-```text
-main.cat
-claw.toml
-src/
-  modules.cat
-  api.cat
-  runtime.cat
-  util.cat
-```
-
-`src/modules.cat`
-
-```cat
-pub modules {api, runtime, util}
-```
-
-`src/api.cat`
-
-```cat
-realm src.api
-
-share shape Config {
-    share port: Int32
-}
-
-share choice Signal {
-    ready
-    failed(code: Int32)
-}
-
-share fn add(base: Int32, extra: Int32) -> Int32 {
-    give base + extra
-}
-```
-
-`main.cat`
-
-```cat
-realm main
-
-import src.{util, runtime}
-import src.api.{Config, Signal, add}
-import term.{emit}
+import src.demo.{ word_count }
 
 fn main() -> Int32 {
-    raw {
-        emit("boot")
-    }
-    runtime.banner()
-    give add(util.answer(), 1)
+    val words = Vec[Str]["hello", "world", "hello"]
+    val counts = word_count(ref words)
+    println(counts.len())
+    0
 }
 ```
 
-What happens here:
-- `main.cat` is the workspace entry
-- `src/modules.cat` allows outer code to traverse into `src.api`, `src.runtime`, and `src.util`
-- `share` makes `Config`, `Signal`, and `add` visible outside `src.api`
-- `import src.api.{...}` brings selected shared items into scope
-- `import src.{runtime}` brings the module path into scope
-- `import term.{emit}` crosses into a declared dependency root
+## Compiler Layout
 
-## Workspace Structure
+The compiler implementation lives in [`claw/`](./claw).
 
-A typical workspace looks like this:
+Key areas:
 
-```text
-main.cat
-claw.toml
-src/
-  modules.cat
-  api.cat
-  runtime.cat
-  util.cat
+- `claw/src/parser/` - lexer, parser, AST construction
+- `claw/src/analysis/` - semantic analysis, type resolution, ownership and borrow checking
+- `claw/src/ir/` - AIR, OIR, and LIR lowering
+- `claw/src/backend/` - LLVM IR emission and native build flow
+- `claw/src/driver/` - CLI entry points and build commands
+- `claw/runtime/` - native runtime support used by generated programs
+
+## Compiler Commands
+
+From the compiler directory, the main commands are:
+
+- `check` - parse, type-check, and borrow-check source or workspace
+- `validate` - validate workspace graph and entry rules
+- `build` - produce a native executable for the supported subset
+- `air` - print AIR
+- `oir` - print OIR
+- `lir` - print LIR
+- `llvm` - print LLVM IR
+
+## Testing
+
+The active revised test suites are separated by layer:
+
+- `claw/test/` - frontend and semantic checks
+- `claw/test_backend/` - LLVM IR regression checks
+- `claw/test_native/` - native executable integration tests
+
+On the current MSYS2 UCRT64 setup, the project is typically built and tested with:
+
+```bash
+C:/msys64/ucrt64/bin/cmake.exe --build claw/build-ucrt64-clang --target claw -- -j 4
+bash claw/test/run_frontend_tests.sh
+bash claw/test_backend/run_backend_tests.sh
+bash claw/test_native/run_native_tests.sh
 ```
 
-Root file:
+The backend and native suites intentionally keep generated `.ll` artifacts so they can be inspected after a run.
 
-```cat
-realm main
+## What Is Already Working
 
-import src.{util, runtime}
-import src.api.{Config, Signal, add}
-import term.{emit}
+Broadly, the current compiler already covers:
 
-fn main() -> Int32 {
-    raw {
-        emit("boot")
-    }
-    runtime.banner()
-    give add(util.answer(), 1)
-}
-```
+- revised `val` / `var` bindings
+- revised `ref` / `ref mut` borrowing
+- `Result[T, E]`, `Maybe[T]`, `try`, and explicit `pick`
+- workspace entry validation for `main.cat`
+- borrow checking for path-based field overlap and `Vec` to `Span` rules
+- rejection of borrowed fields in normal `shape` declarations
+- must-use enforcement for `Result[T, E]` and `Maybe[T]` statement values
+- scoped references and `Anchor`
+- LLVM IR emission for the supported subset
+- native `.exe` generation for the supported subset
 
-Non-root folder index:
+## What Is Still In Progress
 
-```cat
-pub modules {api, util, runtime}
-```
+Major areas still being matured include:
 
-Rules:
-- `main.cat` is the fixed workspace entry file.
-- root `main.cat` is entry-only and cannot be imported as a module.
-- the root workspace does not need `modules.cat`.
-- non-root folders use `modules.cat` to publish modules outward.
-- `share` controls item visibility inside a realm.
-- `modules.cat` controls folder-level traversal from outside the folder.
-- the source path and `realm` should match in a structured workspace.
+- the remaining type-surface cleanup against the revised PRDs
+- broader builtin method dispatch in receiver-first form
+- `Arena` and other advanced ownership helpers
+- deeper borrow-checker maturity for more complex escape and aggregate scenarios
+- broader native/backend coverage beyond the current supported subset
+- ongoing documentation and ergonomics refinement
 
+## Language Governance In This Repo
 
-## Project Configuration
+This repository is intentionally PRD-driven.
 
-The intended config shape is:
+The language direction is defined by the revised design documents in [`revise/`](./revise), and implementation work is expected to track those revisions carefully and explicitly.
 
-```toml
-[project]
-name = "TICTACTOE"
-version = "0.1.0"
-edition = "2025"
+## License
 
-[dependencies]
-term = { version = "1.0.0", abi = "claw", emit = "raw fn emit(message: look Text) -> Unit {}" }
-```
-
-Rules:
-- `main.cat` is the entry; config should not manually redefine entry.
-- dependencies are explicit.
-- dependency contracts can describe typed external functions.
-
-## Numeric Literals
-
-Examples:
-
-```cat
-1
-1.5
-42_UInt16
-1.5_Float32
-```
-
-Current direction:
-- explicit suffixes are preferred where precision matters.
-- no hidden numeric widening rules that obscure cost or safety.
-- size-related types such as `USize` and `ISize` are part of the core model.
-
-## Core Data Type Direction
-
-The language is not intended to be `Int32`-only.
-
-The planned core surface includes families such as:
-- `Byte`
-- `Bool`
-- `Rune`
-- `Int8`, `Int16`, `Int32`, `Int64`, `Int128`
-- `UInt8`, `UInt16`, `UInt32`, `UInt64`, `UInt128`
-- `Bits8`, `Bits16`, `Bits32`, `Bits64`, `Bits128`
-- `Float32`, `Float64`
-- `USize`, `ISize`
-- `Text`, `Bytes`
-- `Span of T`, `Vec of T`, `Table of K, V`, `Set of T`, `Ring of T`, `Heap of T`
-
-## Small End-To-End Example
-
-```cat
-realm main
-
-choice Signal {
-    ready
-    failed(code: Int32)
-}
-
-fn handle(signal: Signal) -> Int32 {
-    pick signal {
-        ready {
-            println("ready")
-            give 0
-        }
-        failed(code) {
-            print(code)
-            give code
-        }
-    }
-}
-
-fn main() -> Int32 {
-    hold title: Text = "C@"
-    print(title.len())
-    give handle(ready)
-}
-```
-
-## Design Summary
-
-C@ aims to be:
-- **Fast** enough to feel native like C
-- **Safe** enough that memory-safety mistakes are pushed out of safe code
-- **Simple** enough that the syntax and mental model stay lighter than Rust
-
-That is the language direction this repository is building toward.
+This project is licensed under the terms in [`LICENSE`](./LICENSE).

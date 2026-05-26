@@ -99,7 +99,12 @@ std::string AirEmitter::emitFn(const FnDecl* fn, int indent) const {
 
 std::string AirEmitter::emitShape(const ShapeDecl* shape, int indent) const {
     std::ostringstream out;
-    out << indentText(indent) << "air.shape " << shape->name << "\n";
+    out << indentText(indent) << "air." << (shape->isViewShape ? "view_shape " : "shape ")
+        << shape->name;
+    if (shape->isViewShape && !shape->scopeParamName.empty()) {
+        out << "[" << shape->scopeParamName << "]";
+    }
+    out << "\n";
     const auto* info = sema.lookupShape(shape->name);
     if (!info) {
         return out.str();
@@ -262,6 +267,12 @@ std::string AirEmitter::emitStmt(const Stmt* stmt, int indent) const {
         return out.str();
     }
 
+    if (auto* scope = dynamic_cast<const ScopeStmt*>(stmt)) {
+        out << pad << "scope " << scope->name << "\n";
+        out << emitBlock(scope->body.get(), indent + 1);
+        return out.str();
+    }
+
     if (dynamic_cast<const StopStmt*>(stmt)) {
         out << pad << "stop\n";
         return out.str();
@@ -298,6 +309,17 @@ std::string AirEmitter::emitExprValue(const Expr* expr) const {
         out << ident->name;
     } else if (auto* binary = dynamic_cast<const BinaryExpr*>(expr)) {
         out << "(" << emitExprValue(binary->left.get()) << " " << binary->op << " " << emitExprValue(binary->right.get()) << ")";
+    } else if (auto* borrow = dynamic_cast<const BorrowExpr*>(expr)) {
+        out << "ref";
+        if (borrow->isMutable) {
+            out << " mut";
+        }
+        if (!borrow->scopeName.empty()) {
+            out << "[" << borrow->scopeName << "]";
+        }
+        out << " " << emitExprValue(borrow->target.get());
+    } else if (auto* index = dynamic_cast<const IndexExpr*>(expr)) {
+        out << emitExprValue(index->object.get()) << "[" << emitExpr(index->index.get()) << "]";
     } else if (auto* call = dynamic_cast<const CallExpr*>(expr)) {
         out << emitExprValue(call->callee.get()) << "(";
         for (size_t i = 0; i < call->args.size(); ++i) {
@@ -307,6 +329,19 @@ std::string AirEmitter::emitExprValue(const Expr* expr) const {
             out << emitExpr(call->args[i].get());
         }
         out << ")";
+    } else if (auto* shapeInit = dynamic_cast<const ShapeInitExpr*>(expr)) {
+        out << shapeInit->name;
+        if (!shapeInit->scopeName.empty()) {
+            out << "[" << shapeInit->scopeName << "]";
+        }
+        out << " {";
+        for (size_t i = 0; i < shapeInit->fields.size(); ++i) {
+            if (i > 0) {
+                out << ", ";
+            }
+            out << shapeInit->fields[i].name << ": " << emitExpr(shapeInit->fields[i].value.get());
+        }
+        out << "}";
     } else if (auto* member = dynamic_cast<const MemberExpr*>(expr)) {
         out << emitExprValue(member->object.get()) << "." << member->member;
     } else {

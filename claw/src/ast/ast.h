@@ -17,6 +17,7 @@ struct AstNode {
 struct TypeNode : public AstNode {
     std::string name;
     std::string viewKind;
+    std::string scopeName;
     std::vector<std::unique_ptr<TypeNode>> params;
 };
 
@@ -70,7 +71,20 @@ struct IndexExpr : public Expr {
 
 struct BorrowExpr : public Expr {
     bool isMutable = false;
+    std::string scopeName;
     std::unique_ptr<Expr> target;
+};
+
+struct ShapeInitField {
+    SourceSpan span;
+    std::string name;
+    std::unique_ptr<Expr> value;
+};
+
+struct ShapeInitExpr : public Expr {
+    std::string name;
+    std::string scopeName;
+    std::vector<ShapeInitField> fields;
 };
 
 struct Stmt : public AstNode {};
@@ -152,6 +166,11 @@ struct RawStmt : public Stmt {
     std::unique_ptr<BlockStmt> body;
 };
 
+struct ScopeStmt : public Stmt {
+    std::string name;
+    std::unique_ptr<BlockStmt> body;
+};
+
 struct Decl : public AstNode {
     bool isShared = false;
 };
@@ -178,6 +197,8 @@ struct ShapeField {
 
 struct ShapeDecl : public Decl {
     std::string name;
+    bool isViewShape = false;
+    std::string scopeParamName;
     std::vector<std::string> typeParams;
     std::vector<ShapeField> fields;
 };

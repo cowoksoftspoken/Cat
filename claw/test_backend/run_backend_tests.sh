@@ -21,7 +21,9 @@ ARTIFACT_DIR="$ROOT_DIR/test_backend/artifacts"
 mkdir -p "$ARTIFACT_DIR"
 result_ll="$ARTIFACT_DIR/revise_result_llvm.ll"
 maybe_ll="$ARTIFACT_DIR/revise_maybe.ll"
-rm -f "$result_ll" "$maybe_ll"
+anchor_ll="$ARTIFACT_DIR/revise_anchor.ll"
+view_shape_ll="$ARTIFACT_DIR/revise_view_shape_scope.ll"
+rm -f "$result_ll" "$maybe_ll" "$anchor_ll" "$view_shape_ll"
 
 echo "[llvm/pass] test_backend/revise_result_llvm.cat"
 "$CLAW_EXE" llvm "$ROOT_DIR/test_backend/revise_result_llvm.cat" > "$result_ll"
@@ -39,3 +41,24 @@ llvm-as "$result_ll" -o /dev/null
 echo "[llvm/pass] test/revise_maybe.cat"
 "$CLAW_EXE" llvm "$ROOT_DIR/test/revise_maybe.cat" > "$maybe_ll"
 llvm-as "$maybe_ll" -o /dev/null
+
+echo "[llvm/pass] test_backend/revise_anchor.cat"
+"$CLAW_EXE" llvm "$ROOT_DIR/test_backend/revise_anchor.cat" > "$anchor_ll"
+anchor_output="$(tr -d '' < "$anchor_ll")"
+if [[ "$anchor_output" != *'@"claw.runtime.anchor.alloc"'* ]] ||
+   [[ "$anchor_output" != *'@"claw.runtime.anchor.free"'* ]] ||
+   [[ "$anchor_output" != *'@"claw.runtime.println.slice"'* ]]; then
+  echo "revised backend LLVM output did not include the expected Anchor lowering markers" >&2
+  exit 1
+fi
+llvm-as "$anchor_ll" -o /dev/null
+
+echo "[llvm/pass] test_backend/revise_view_shape_scope.cat"
+"$CLAW_EXE" llvm "$ROOT_DIR/test_backend/revise_view_shape_scope.cat" > "$view_shape_ll"
+view_shape_output="$(tr -d '\r' < "$view_shape_ll")"
+if [[ "$view_shape_output" != *'define internal void @"revise_view_shape_scope::main"'* ]] ||
+   [[ "$view_shape_output" != *'@"claw.runtime.println.slice"'* ]]; then
+  echo "revised backend LLVM output did not include the expected view-shape lowering markers" >&2
+  exit 1
+fi
+llvm-as "$view_shape_ll" -o /dev/null

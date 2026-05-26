@@ -19,7 +19,10 @@ struct ChoiceDecl;
 struct Stmt;
 struct BlockStmt;
 struct Expr;
+struct ExprStmt;
 struct TypeNode;
+struct ScopeStmt;
+struct ShapeInitExpr;
 
 class SemanticAnalyzer {
 public:
@@ -46,10 +49,12 @@ private:
     TargetSpec target;
     const FnDecl* currentFunction = nullptr;
     const FunctionSignature* currentSignature = nullptr;
+    const ExprStmt* implicitTailExpr = nullptr;
     std::optional<size_t> currentViewReturnSourceParam;
     bool currentViewReturnSeen = false;
     int loopDepth = 0;
     int rawDepth = 0;
+    std::vector<std::string> activeNamedScopes;
 
     void reportError(const std::string& msg);
     void reportError(const SourceSpan& span, const std::string& msg);
@@ -85,6 +90,14 @@ private:
     bool canPassArgumentType(Expr* expr, const ResolvedType& from, const ResolvedType& to) const;
     bool canBorrowExprAsEdit(const Expr* expr) const;
     bool isRawAddressType(const ResolvedType& type) const;
+    bool typeContainsBorrowedStorage(const ResolvedType& type) const;
+    bool typeUsesOnlyNamedScope(const ResolvedType& type, std::string_view scopeName) const;
+    bool typeContainsScopeName(const ResolvedType& type) const;
+    bool typeIsMustUse(const ResolvedType& type) const;
+    bool isImplicitTailExpr(const ExprStmt* stmt) const;
+    bool isNamedScopeActive(std::string_view scopeName) const;
+    bool symbolCanStoreNamedScope(const Symbol& symbol, std::string_view scopeName) const;
+    ResolvedType bindFormalScopeName(const ResolvedType& type, std::string_view formalScope, std::string_view actualScope) const;
 
     std::shared_ptr<Symbol> lookupSymbol(const std::string& name) const;
     void defineVariable(

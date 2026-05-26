@@ -1,0 +1,12 @@
+view shape Parser[s] {
+    input: ref[s] Str,
+    current: ref[s] Str,
+}
+
+fn main() {
+    val source = "hello"
+    scope s {
+        val parser = Parser { input: ref[s] source, current: ref[s] source }
+        println(parser.current)
+    }
+}

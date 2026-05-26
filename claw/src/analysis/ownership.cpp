@@ -114,6 +114,15 @@ std::string pathMutationConflictMessage(std::string_view target, const BorrowTok
     return "Cannot mutate `" + std::string(target) + "` while `" + formatBorrowTarget(existing) + "` is still borrowed.";
 }
 
+bool isAnchorStaticConstructorCall(const Expr* callee) {
+    const auto* member = dynamic_cast<const MemberExpr*>(callee);
+    if (!member) {
+        return false;
+    }
+    const auto* objectIdent = dynamic_cast<const IdentExpr*>(member->object.get());
+    return objectIdent && objectIdent->name == "Anchor" && member->member == "new";
+}
+
 void releaseBorrowTokenInStateMap(
     std::unordered_map<std::string, TrackedVar>& stateMap,
     const BorrowToken& token) {
@@ -531,6 +540,15 @@ void OwnershipChecker::checkStmt(Stmt* stmt) {
         return;
     }
 
+    if (auto* scope = dynamic_cast<ScopeStmt*>(stmt)) {
+        enterScope(scope->body.get(), ScopeKind::Normal);
+        for (auto& stmtInBlock : scope->body->statements) {
+            checkStmt(stmtInBlock.get());
+        }
+        exitScope();
+        return;
+    }
+
     if (auto* stop = dynamic_cast<StopStmt*>(stmt)) {
         for (const auto& drop : collectUnwindDrops(ScopeKind::LoopBoundary)) {
             recordDropBeforeStmt(stop, drop.name, drop.type);
@@ -595,6 +613,14 @@ void OwnershipChecker::checkExpr(Expr* expr, bool isConsume) {
         return;
     }
 
+    if (auto* shapeInit = dynamic_cast<ShapeInitExpr*>(expr)) {
+        for (auto& field : shapeInit->fields) {
+            const ResolvedType fieldType = typeOfExpr(field.value.get());
+            checkExpr(field.value.get(), fieldType.isOwned());
+        }
+        return;
+    }
+
     if (auto* member = dynamic_cast<MemberExpr*>(expr)) {
         const ResolvedType memberType = typeOfExpr(expr);
         checkExpr(member->object.get(), isConsume && memberType.isOwned());
@@ -604,6 +630,13 @@ void OwnershipChecker::checkExpr(Expr* expr, bool isConsume) {
 
 void OwnershipChecker::checkCallExpr(CallExpr* call) {
     checkExpr(call->callee.get(), false);
+
+    if (isAnchorStaticConstructorCall(call->callee.get())) {
+        for (auto& arg : call->args) {
+            checkExpr(arg.get(), true);
+        }
+        return;
+    }
 
     const FunctionSignature* signature = resolveCallSignature(call->callee.get());
     const auto methodSignature = resolveMethodSignature(call->callee.get());

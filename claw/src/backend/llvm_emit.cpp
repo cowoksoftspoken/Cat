@@ -228,7 +228,15 @@ std::string LlvmEmitter::emitFunction(const LirFunction& fn) {
                     (void)ensureValue(value.value, state, blockLines);
                 },
                 [&](const LirDropInst& value) {
-                    blockLines.push_back("  ; drop " + value.name + " : " + value.type);
+                    const std::string baseType = canonicalBackendTypeBase(stripGenericArgs(stripViewPrefix(value.type)));
+                    if (baseType == "Anchor") {
+                        const std::string freeSymbol = quoteGlobal("claw.runtime.anchor.free");
+                        addRuntimeDecl("declare void " + freeSymbol + "(ptr)");
+                        const std::string operand = ensureValue(LirValue{value.name, value.type, false}, state, blockLines);
+                        blockLines.push_back("  call void " + freeSymbol + "(ptr " + operand + ")");
+                    } else {
+                        blockLines.push_back("  ; drop " + value.name + " : " + value.type);
+                    }
                 },
                 [&](const LirBranchInst& value) {
                     std::string operand = ensureValue(value.condition, state, blockLines);

@@ -46,7 +46,7 @@ private:
 
     std::unique_ptr<Decl> parseDeclaration();
     std::unique_ptr<FnDecl> parseFnDeclaration();
-    std::unique_ptr<ShapeDecl> parseShapeDeclaration();
+    std::unique_ptr<ShapeDecl> parseShapeDeclaration(bool isViewShape = false);
     std::unique_ptr<ChoiceDecl> parseChoiceDeclaration();
     std::unique_ptr<TypeNode> parseType();
 
@@ -59,6 +59,7 @@ private:
     std::unique_ptr<ScanStmt> parseScan();
     std::unique_ptr<PickStmt> parsePick();
     std::unique_ptr<LiftStmt> parseLift();
+    std::unique_ptr<ScopeStmt> parseScope();
 
     std::unique_ptr<Expr> parseExpression();
     std::unique_ptr<Expr> parseComparison();
@@ -66,6 +67,7 @@ private:
     std::unique_ptr<Expr> parseUnary();
     std::unique_ptr<Expr> parsePostfix();
     std::unique_ptr<Expr> parsePrimary();
+    std::unique_ptr<ShapeInitExpr> parseShapeInitExpr(std::string name, std::string scopeName, SourceSpan span);
 };
 
 } // namespace claw::frontend

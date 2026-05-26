@@ -42,10 +42,14 @@ expect_generated_ll() {
 single_output="$ARTIFACT_DIR/revise_single_file.exe"
 workspace_output="$ARTIFACT_DIR/revise_workspace.exe"
 maybe_output="$ARTIFACT_DIR/revise_maybe.exe"
+anchor_output="$ARTIFACT_DIR/revise_anchor.exe"
+view_shape_output="$ARTIFACT_DIR/revise_view_shape_scope.exe"
 exit_code_output="$ARTIFACT_DIR/revise_exit_code.exe"
 rm -f "$single_output" "${single_output%.exe}.ll" \
       "$workspace_output" "${workspace_output%.exe}.ll" \
       "$maybe_output" "${maybe_output%.exe}.ll" \
+      "$anchor_output" "${anchor_output%.exe}.ll" \
+      "$view_shape_output" "${view_shape_output%.exe}.ll" \
       "$exit_code_output" "${exit_code_output%.exe}.ll"
 
 echo "[build/pass] test_native/revise_single_file.cat"
@@ -77,6 +81,27 @@ expected_maybe_stdout=$'42\n0\nC@\nworld'
 if [[ "$maybe_stdout" != "$expected_maybe_stdout" ]]; then
   echo "revised maybe native build produced unexpected output:" >&2
   printf '%s\n' "$maybe_stdout" >&2
+  exit 1
+fi
+
+
+echo "[build/pass] test_native/revise_anchor.cat"
+"$CLAW_EXE" build "$ROOT_DIR/test_native/revise_anchor.cat" "$anchor_output" >/dev/null
+expect_generated_ll "$anchor_output"
+
+anchor_stdout="$(normalize_stdout "$anchor_output")"
+if [[ "$anchor_stdout" != "hello" ]]; then
+  echo "revised anchor native build produced unexpected output: $anchor_stdout" >&2
+  exit 1
+fi
+
+echo "[build/pass] test_native/revise_view_shape_scope.cat"
+"$CLAW_EXE" build "$ROOT_DIR/test_native/revise_view_shape_scope.cat" "$view_shape_output" >/dev/null
+expect_generated_ll "$view_shape_output"
+
+view_shape_stdout="$(normalize_stdout "$view_shape_output")"
+if [[ "$view_shape_stdout" != "hello" ]]; then
+  echo "revised view-shape native build produced unexpected output: $view_shape_stdout" >&2
   exit 1
 fi
 

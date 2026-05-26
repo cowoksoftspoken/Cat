@@ -105,6 +105,7 @@ Token Lexer::readIdentifierOrKeyword() {
         {"when", TokenKind::KwWhen}, {"otherwise", TokenKind::KwOtherwise},
         {"loop", TokenKind::KwLoop}, {"scan", TokenKind::KwScan}, {"stop", TokenKind::KwStop},
         {"skip", TokenKind::KwSkip}, {"shape", TokenKind::KwShape}, {"choice", TokenKind::KwChoice},
+        {"scope", TokenKind::KwScope},
         {"import", TokenKind::KwImport}, {"share", TokenKind::KwShare}, {"super", TokenKind::KwSuper},
         {"pub", TokenKind::KwPub}, {"modules", TokenKind::KwModules},
         {"pick", TokenKind::KwPick}, {"lift", TokenKind::KwLift}, {"raw", TokenKind::KwRaw},

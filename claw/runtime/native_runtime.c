@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 typedef struct claw_slice {
     const unsigned char* ptr;
@@ -76,6 +77,8 @@ void claw_runtime_println_double(double value) __asm__("claw.runtime.println.dou
 void claw_runtime_println_ptr(void* value) __asm__("claw.runtime.println.ptr");
 void claw_runtime_println_slice(claw_slice value) __asm__("claw.runtime.println.slice");
 void claw_runtime_println_buffer(claw_buffer value) __asm__("claw.runtime.println.buffer");
+void* claw_runtime_anchor_alloc(int64_t size) __asm__("claw.runtime.anchor.alloc");
+void claw_runtime_anchor_free(void* ptr) __asm__("claw.runtime.anchor.free");
 
 void claw_runtime_print_i1(_Bool value) {
     fputs(value ? "true" : "false", stdout);
@@ -185,4 +188,19 @@ void claw_runtime_println_slice(claw_slice value) {
 void claw_runtime_println_buffer(claw_buffer value) {
     claw_write_bytes(value.ptr, value.len);
     claw_finish_print(true);
+}
+
+
+void* claw_runtime_anchor_alloc(int64_t size) {
+    const size_t request = size <= 0 ? 1u : (size_t)size;
+    void* ptr = malloc(request);
+    if (ptr == NULL) {
+        fputs("fatal: Anchor allocation failed\n", stderr);
+        abort();
+    }
+    return ptr;
+}
+
+void claw_runtime_anchor_free(void* ptr) {
+    free(ptr);
 }

@@ -146,7 +146,8 @@ bool Parser::isStatementRecoveryPoint(TokenKind kind) const {
            kind == TokenKind::KwIf || kind == TokenKind::KwWhen ||
            kind == TokenKind::KwLoop || kind == TokenKind::KwScan || kind == TokenKind::KwPick ||
            kind == TokenKind::KwLift || kind == TokenKind::KwStop || kind == TokenKind::KwSkip ||
-           kind == TokenKind::KwRaw || kind == TokenKind::RBrace || isTopLevelRecoveryPoint(kind);
+           kind == TokenKind::KwRaw || kind == TokenKind::KwScope ||
+           kind == TokenKind::RBrace || isTopLevelRecoveryPoint(kind);
 }
 
 void Parser::recordDiagnostic(const DiagnosticError& error) {
@@ -307,21 +308,34 @@ std::unique_ptr<RealmDecl> Parser::parseFile() {
 
 std::unique_ptr<Decl> Parser::parseDeclaration() {
     bool isShared = match(TokenKind::KwShare);
+    const bool isViewShape = check(TokenKind::Identifier) && peek().text == "view" && checkAhead(1, TokenKind::KwShape);
+    if (isViewShape) {
+        advance();
+    }
 
     if (match(TokenKind::KwFn)) {
+        if (isViewShape) {
+            failAt(previous(), "'view' may only be used with 'shape'.");
+        }
         auto fn = parseFnDeclaration();
         fn->isShared = isShared;
         return fn;
     }
     if (match(TokenKind::KwShape)) {
-        auto shape = parseShapeDeclaration();
+        auto shape = parseShapeDeclaration(isViewShape);
         shape->isShared = isShared;
         return shape;
     }
     if (match(TokenKind::KwChoice)) {
+        if (isViewShape) {
+            failAt(previous(), "'view' may only be used with 'shape'.");
+        }
         auto choice = parseChoiceDeclaration();
         choice->isShared = isShared;
         return choice;
+    }
+    if (isViewShape) {
+        failAt(previous(), "Expected 'shape' after 'view'.");
     }
 
     failAtCurrent("Unexpected token at top level.");
@@ -356,13 +370,21 @@ std::unique_ptr<FnDecl> Parser::parseFnDeclaration() {
     return fn;
 }
 
-std::unique_ptr<ShapeDecl> Parser::parseShapeDeclaration() {
+std::unique_ptr<ShapeDecl> Parser::parseShapeDeclaration(bool isViewShape) {
     auto shape = std::make_unique<ShapeDecl>();
     shape->span = spanFromToken(previous());
+    shape->isViewShape = isViewShape;
 
     consumeNameToken("Expected shape name");
     shape->name = previous().text;
-    parseTypeParameterList(&shape->typeParams);
+    if (isViewShape) {
+        consume(TokenKind::LBracket, "Expected '[' after view shape name.");
+        consumeNameToken("Expected named scope parameter for view shape.");
+        shape->scopeParamName = previous().text;
+        consume(TokenKind::RBracket, "Expected ']' after view shape scope parameter.");
+    } else {
+        parseTypeParameterList(&shape->typeParams);
+    }
 
     consume(TokenKind::LBrace, "Expected '{' to start shape body");
     while (!check(TokenKind::RBrace) && !isAtEnd()) {
@@ -374,6 +396,7 @@ std::unique_ptr<ShapeDecl> Parser::parseShapeDeclaration() {
         consume(TokenKind::Colon, "Expected ':' after field name");
         field.type = parseType();
         shape->fields.push_back(std::move(field));
+        match(TokenKind::Comma);
     }
     consume(TokenKind::RBrace, "Expected '}' to end shape body");
     return shape;
@@ -428,6 +451,11 @@ std::unique_ptr<TypeNode> Parser::parseType() {
         } else {
             type->viewKind = "look";
         }
+        if (match(TokenKind::LBracket)) {
+            consumeNameToken("Expected named scope after '[' in ref type.");
+            type->scopeName = previous().text;
+            consume(TokenKind::RBracket, "Expected ']' after named scope in ref type.");
+        }
     } else if (match(TokenKind::KwLook)) {
         failAt(previous(), legacySyntaxMessage(TokenKind::KwLook));
     } else if (match(TokenKind::KwEdit)) {
@@ -478,6 +506,7 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
     if (match(TokenKind::KwScan)) return parseScan();
     if (match(TokenKind::KwPick)) return parsePick();
     if (match(TokenKind::KwLift)) return parseLift();
+    if (match(TokenKind::KwScope)) return parseScope();
     if (match(TokenKind::KwStop)) {
         auto stmt = std::make_unique<StopStmt>();
         stmt->span = spanFromToken(previous());
@@ -650,6 +679,15 @@ std::unique_ptr<LiftStmt> Parser::parseLift() {
     return stmt;
 }
 
+std::unique_ptr<ScopeStmt> Parser::parseScope() {
+    auto stmt = std::make_unique<ScopeStmt>();
+    stmt->span = spanFromToken(previous());
+    consumeNameToken("Expected named scope after 'scope'");
+    stmt->name = previous().text;
+    stmt->body = parseBlock();
+    return stmt;
+}
+
 std::unique_ptr<Expr> Parser::parseExpression() {
     return parseComparison();
 }
@@ -691,6 +729,11 @@ std::unique_ptr<Expr> Parser::parseUnary() {
         if (match(TokenKind::KwMut)) {
             borrow->isMutable = true;
         }
+        if (match(TokenKind::LBracket)) {
+            consumeNameToken("Expected named scope after '[' in ref expression.");
+            borrow->scopeName = previous().text;
+            consume(TokenKind::RBracket, "Expected ']' after named scope in ref expression.");
+        }
         borrow->target = parseUnary();
         return borrow;
     }
@@ -701,6 +744,30 @@ std::unique_ptr<Expr> Parser::parseUnary() {
 std::unique_ptr<Expr> Parser::parsePostfix() {
     auto expr = parsePrimary();
     while (true) {
+        if (auto* ident = dynamic_cast<IdentExpr*>(expr.get())) {
+            const bool startsShapeLiteralBody =
+                checkAhead(0, TokenKind::LBrace) &&
+                (checkAhead(1, TokenKind::RBrace) ||
+                 (pos + 2 < tokens.size() && isNameToken(tokens[pos + 1].kind) && checkAhead(2, TokenKind::Colon)));
+
+            if (check(TokenKind::LBracket) && checkAhead(1, TokenKind::Identifier) &&
+                checkAhead(2, TokenKind::RBracket) && checkAhead(3, TokenKind::LBrace) &&
+                (checkAhead(4, TokenKind::RBrace) ||
+                 (pos + 5 < tokens.size() && isNameToken(tokens[pos + 4].kind) && checkAhead(5, TokenKind::Colon)))) {
+                consume(TokenKind::LBracket, "Expected '[' after shape name.");
+                consumeNameToken("Expected named scope after '[' in shape literal.");
+                const std::string scopeName = previous().text;
+                consume(TokenKind::RBracket, "Expected ']' after named scope in shape literal.");
+                expr = parseShapeInitExpr(ident->name, scopeName, ident->span);
+                continue;
+            }
+
+            if (startsShapeLiteralBody) {
+                expr = parseShapeInitExpr(ident->name, {}, ident->span);
+                continue;
+            }
+        }
+
         if (match(TokenKind::LParen)) {
             auto call = std::make_unique<CallExpr>();
             call->span = expr->span;
@@ -737,6 +804,27 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
 
         break;
     }
+    return expr;
+}
+
+std::unique_ptr<ShapeInitExpr> Parser::parseShapeInitExpr(std::string name, std::string scopeName, SourceSpan span) {
+    auto expr = std::make_unique<ShapeInitExpr>();
+    expr->span = span;
+    expr->name = std::move(name);
+    expr->scopeName = std::move(scopeName);
+
+    consume(TokenKind::LBrace, "Expected '{' to start shape literal.");
+    while (!check(TokenKind::RBrace) && !isAtEnd()) {
+        ShapeInitField field;
+        consumeNameToken("Expected field name in shape literal.");
+        field.span = spanFromToken(previous());
+        field.name = previous().text;
+        consume(TokenKind::Colon, "Expected ':' after shape literal field name.");
+        field.value = parseExpression();
+        expr->fields.push_back(std::move(field));
+        match(TokenKind::Comma);
+    }
+    consume(TokenKind::RBrace, "Expected '}' to end shape literal.");
     return expr;
 }
 

@@ -138,6 +138,33 @@ std::optional<OirExternalCallInfo> externalCallInfo(
     return OirExternalCallInfo{dependencyRoot, "opaque", linkageName, true, true};
 }
 
+std::optional<std::string> builtinCallTag(const SemanticAnalyzer& sema, const CallExpr* call) {
+    if (!call) {
+        return std::nullopt;
+    }
+
+    if (const auto methodSignature = sema.lookupMethodSignature(call->callee.get());
+        methodSignature.has_value() && methodSignature->isBuiltin) {
+        return methodSignature->receiverType.name + "." + methodSignature->name;
+    }
+
+    auto* member = dynamic_cast<const MemberExpr*>(call->callee.get());
+    if (!member) {
+        return std::nullopt;
+    }
+
+    auto* objectIdent = dynamic_cast<const IdentExpr*>(member->object.get());
+    if (!objectIdent) {
+        return std::nullopt;
+    }
+
+    if (objectIdent->name == "Anchor" && member->member == "new") {
+        return std::string("Anchor.new");
+    }
+
+    return std::nullopt;
+}
+
 std::string externalCallSuffix(const std::optional<OirExternalCallInfo>& info) {
     if (!info.has_value()) {
         return {};
@@ -384,6 +411,11 @@ OirValue lowerExpr(
         appendInst(context, blockIndex, OirFieldInst{result, object, member->member, type});
         return OirValue{result, type, false};
     }
+    if (auto* borrow = dynamic_cast<const BorrowExpr*>(expr)) {
+        OirValue target = lowerExpr(sema, borrow->target.get(), context, blockIndex);
+        target.type = exprType(sema, expr);
+        return target;
+    }
     if (auto* binary = dynamic_cast<const BinaryExpr*>(expr)) {
         const OirValue left = lowerExpr(sema, binary->left.get(), context, blockIndex);
         const OirValue right = lowerExpr(sema, binary->right.get(), context, blockIndex);
@@ -391,6 +423,17 @@ OirValue lowerExpr(
         const std::string type = exprType(sema, expr);
         appendInst(context, blockIndex, OirBinaryInst{result, binaryOpName(binary->op), left, right, type});
         return OirValue{result, type, false};
+    }
+    if (auto* shapeInit = dynamic_cast<const ShapeInitExpr*>(expr)) {
+        const std::string type = exprType(sema, expr);
+        const std::string result = context.tempName();
+        appendInst(context, blockIndex, OirHoldInst{false, result, type, std::nullopt});
+        const OirValue object{result, type, false};
+        for (const auto& field : shapeInit->fields) {
+            const OirValue fieldValue = lowerExpr(sema, field.value.get(), context, blockIndex);
+            appendInst(context, blockIndex, OirStoreFieldInst{object, field.name, fieldValue});
+        }
+        return object;
     }
     if (auto* call = dynamic_cast<const CallExpr*>(expr)) {
         if (const auto ctorIt = sema.result().choiceConstructors.find(call);
@@ -418,14 +461,15 @@ OirValue lowerExpr(
 
         const std::string type = exprType(sema, expr);
         const std::string callee = calleeText(call->callee.get());
+        const auto callBuiltinTag = builtinCallTag(sema, call);
         const auto callExternalInfo = externalCallInfo(sema, call, callee, type);
         if (type == "Unit") {
-            appendInst(context, blockIndex, OirCallInst{std::nullopt, callee, std::move(args), type, callExternalInfo});
+            appendInst(context, blockIndex, OirCallInst{std::nullopt, callee, std::move(args), type, callBuiltinTag, callExternalInfo});
             return OirValue{"unit", "Unit", true};
         }
 
         const std::string result = context.tempName();
-        appendInst(context, blockIndex, OirCallInst{result, callee, std::move(args), type, callExternalInfo});
+        appendInst(context, blockIndex, OirCallInst{result, callee, std::move(args), type, callBuiltinTag, callExternalInfo});
         return OirValue{result, type, false};
     }
 
@@ -607,6 +651,14 @@ std::optional<size_t> lowerStmt(
         context.rawRegionStack.push_back(rawRegion);
         lowerBlock(sema, ownership, raw->body.get(), rawLabel, context, contLabel, emitter);
         context.rawRegionStack.pop_back();
+        return context.addBlock(contLabel);
+    }
+
+    if (auto* scope = dynamic_cast<const ScopeStmt*>(stmt)) {
+        const std::string scopeLabel = context.blockName("scope");
+        const std::string contLabel = context.blockName("scope_cont");
+        appendInst(context, currentBlockIndex, OirGotoInst{scopeLabel});
+        lowerBlock(sema, ownership, scope->body.get(), scopeLabel, context, contLabel, emitter);
         return context.addBlock(contLabel);
     }
 
@@ -797,7 +849,12 @@ std::string formatDecl(const OirDecl& decl) {
         },
         [&](const OirShape& shape) {
             std::ostringstream out;
-            out << "oir.shape " << shape.name << formatTypeParams(shape.typeParams)
+            out << "oir." << (shape.isViewShape ? "view_shape " : "shape ")
+                << shape.name;
+            if (shape.isViewShape && !shape.scopeParamName.empty()) {
+                out << "[" << shape.scopeParamName << "]";
+            }
+            out << formatTypeParams(shape.typeParams)
                 << formatSymbolLinkInfo(shape.linkage) << "\n";
             if (shape.layout.has_value()) {
                 out << "  " << formatLayoutInfo(*shape.layout) << "\n";
@@ -885,6 +942,10 @@ bool stmtDefinitelyTerminatesImpl(const OirEmitter& emitter, const Stmt* stmt) {
 
     if (auto* raw = dynamic_cast<const RawStmt*>(stmt)) {
         return emitter.blockDefinitelyTerminates(raw->body.get());
+    }
+
+    if (auto* scope = dynamic_cast<const ScopeStmt*>(stmt)) {
+        return emitter.blockDefinitelyTerminates(scope->body.get());
     }
 
     return false;
@@ -998,6 +1059,8 @@ OirShape OirEmitter::lowerShape(const ShapeDecl* shape, std::string_view realmNa
         return lowered;
     }
 
+    lowered.isViewShape = info->isViewShape;
+    lowered.scopeParamName = info->scopeParamName;
     lowered.typeParams = info->typeParams;
     ResolvedType namedType = makeUnknownType();
     namedType.name = shape->name;

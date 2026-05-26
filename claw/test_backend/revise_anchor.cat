@@ -1,0 +1,4 @@
+fn main() {
+    val stable = Anchor.new("hello")
+    println(stable.get())
+}

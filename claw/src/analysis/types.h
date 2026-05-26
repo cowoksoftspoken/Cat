@@ -69,6 +69,7 @@ enum class LinkageKind {
 struct ResolvedType {
     std::string name;
     std::string viewKind;
+    std::string scopeName;
     std::vector<ResolvedType> params;
     TypeCategory category = TypeCategory::Unknown;
     bool isGeneric = false;
@@ -82,6 +83,8 @@ struct ResolvedType {
 };
 
 struct ShapeInfo {
+    bool isViewShape = false;
+    std::string scopeParamName;
     std::vector<std::string> typeParams;
     std::unordered_map<std::string, ResolvedType> fields;
     std::vector<std::string> fieldOrder;

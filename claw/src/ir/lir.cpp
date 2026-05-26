@@ -215,6 +215,10 @@ LirCallKind classifyCallKind(const OirCallInst& call, const std::unordered_set<s
         return LirCallKind::Runtime;
     }
 
+    if (call.builtinTag.has_value()) {
+        return LirCallKind::Builtin;
+    }
+
     const std::string tail = tailSegment(call.callee);
     if (call.callee.find('.') != std::string::npos && isKnownBuiltinMethod(tail)) {
         return LirCallKind::Builtin;
@@ -254,11 +258,11 @@ LirSafetyTag classifyCallSafety(const OirCallInst& call) {
         return LirSafetyTag::UnsafeBoundary;
     }
 
-    const std::string tail = tailSegment(call.callee);
-    if (!isKnownBuiltinMethod(tail)) {
+    const std::string builtinName = call.builtinTag.has_value() ? tailSegment(*call.builtinTag) : tailSegment(call.callee);
+    if (!isKnownBuiltinMethod(builtinName) && !call.builtinTag.has_value()) {
         return LirSafetyTag::None;
     }
-    return requiresBoundsCheck(tail) ? LirSafetyTag::BoundsCheckRequired : LirSafetyTag::ProvenSafe;
+    return requiresBoundsCheck(builtinName) ? LirSafetyTag::BoundsCheckRequired : LirSafetyTag::ProvenSafe;
 }
 
 std::string classifyHook(const OirCallInst& call, LirCallKind kind) {
@@ -267,7 +271,7 @@ std::string classifyHook(const OirCallInst& call, LirCallKind kind) {
     case LirCallKind::Runtime:
         return std::string("runtime.") + tail;
     case LirCallKind::Builtin:
-        return std::string("builtin.") + tail;
+        return std::string("builtin.") + (call.builtinTag.has_value() ? *call.builtinTag : tail);
     case LirCallKind::External: {
         const auto info = lowerExternalInfo(call);
         const std::string abi = sanitizeHookSegment(info && !info->abi.empty() ? info->abi : std::string("unknown"));
@@ -541,6 +545,7 @@ LirFunction lowerFunction(const OirFunction& fn, const std::unordered_set<std::s
                         value.callee,
                         std::move(args),
                         value.type,
+                        value.builtinTag,
                         kind,
                         safety,
                         classifyHook(value, kind),
@@ -787,7 +792,12 @@ std::string formatDecl(const LirDecl& decl) {
         },
         [&](const LirShape& shape) {
             std::ostringstream out;
-            out << "lir.shape " << shape.name << formatTypeParams(shape.typeParams)
+            out << "lir." << (shape.isViewShape ? "view_shape " : "shape ")
+                << shape.name;
+            if (shape.isViewShape && !shape.scopeParamName.empty()) {
+                out << "[" << shape.scopeParamName << "]";
+            }
+            out << formatTypeParams(shape.typeParams)
                 << formatSymbolLinkInfo(shape.linkage) << "\n";
             if (shape.layout.has_value()) {
                 out << "  " << formatLayoutInfo(*shape.layout) << "\n";
@@ -859,6 +869,8 @@ LirProgram buildLirProgram(const OirProgram& program) {
                 [&](const OirShape& shape) {
                     LirShape loweredShape;
                     loweredShape.name = shape.name;
+                    loweredShape.isViewShape = shape.isViewShape;
+                    loweredShape.scopeParamName = shape.scopeParamName;
                     loweredShape.typeParams = shape.typeParams;
                     loweredShape.linkage = shape.linkage;
                     loweredShape.layout = shape.layout;

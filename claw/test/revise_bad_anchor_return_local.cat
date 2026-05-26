@@ -1,0 +1,6 @@
+fn expose() -> ref Str {
+    val stable = Anchor.new("hello")
+    stable.get()
+}
+
+fn main() {}
