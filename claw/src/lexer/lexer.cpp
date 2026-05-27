@@ -110,13 +110,12 @@ Token Lexer::readIdentifierOrKeyword() {
         {"pub", TokenKind::KwPub}, {"modules", TokenKind::KwModules},
         {"pick", TokenKind::KwPick}, {"lift", TokenKind::KwLift}, {"raw", TokenKind::KwRaw},
         {"as", TokenKind::KwAs}, {"over", TokenKind::KwOver}, {"of", TokenKind::KwOf},
-        {"fail", TokenKind::KwFail}, {"ref", TokenKind::KwRef}, {"mut", TokenKind::KwMut},
-        {"look", TokenKind::KwLook}, {"edit", TokenKind::KwEdit}, {"try", TokenKind::KwTry},
+        {"fail", TokenKind::KwFail}, {"ref", TokenKind::KwRef}, {"mut", TokenKind::KwMut}, {"try", TokenKind::KwTry},
+        {"look", TokenKind::KwLook}, {"edit", TokenKind::KwEdit}, {"realm", TokenKind::KwRealm},
         {"foreign", TokenKind::KwForeign}, {"static", TokenKind::KwStatic},
         {"contract", TokenKind::KwContract}, {"implements", TokenKind::KwImplements},
         {"with", TokenKind::KwWith}, {"self", TokenKind::KwSelf},
-        {"true", TokenKind::KwTrue}, {"false", TokenKind::KwFalse},
-        {"realm", TokenKind::KwRealm}
+        {"true", TokenKind::KwTrue}, {"false", TokenKind::KwFalse}
     };
 
     const auto it = keywords.find(text);

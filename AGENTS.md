@@ -53,10 +53,12 @@ Important directories:
 - `claw/src/parser/`
 - `claw/src/analysis/`
 - `claw/src/ir/`
-- `claw/src/backend/`
+- `claw/src/codegen/`
 - `claw/src/driver/`
+- `claw/src/workspace/`
 - `claw/runtime/`
 - `claw/test/`
+- `claw/test_frontend/`
 - `claw/test_backend/`
 - `claw/test_native/`
 - `revise/`

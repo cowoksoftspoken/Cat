@@ -47,6 +47,22 @@ static void claw_write_i128(__int128 value) {
     }
 }
 
+void* claw_runtime_anchor_alloc(int64_t size) __asm__("claw.runtime.anchor.alloc");
+void claw_runtime_anchor_free(void* ptr) __asm__("claw.runtime.anchor.free");
+
+void* claw_runtime_anchor_alloc(int64_t size) {
+    const size_t request = size <= 0 ? 1u : (size_t)size;
+    void* ptr = malloc(request);
+    if (ptr == NULL) {
+        fputs("fatal: Anchor allocation failed\n", stderr);
+        abort();
+    }
+    return ptr;
+}
+
+void claw_runtime_anchor_free(void* ptr) {
+    free(ptr);
+}
 static void claw_finish_print(bool newline) {
     if (newline) {
         fputc('\n', stdout);
@@ -190,17 +206,3 @@ void claw_runtime_println_buffer(claw_buffer value) {
     claw_finish_print(true);
 }
 
-
-void* claw_runtime_anchor_alloc(int64_t size) {
-    const size_t request = size <= 0 ? 1u : (size_t)size;
-    void* ptr = malloc(request);
-    if (ptr == NULL) {
-        fputs("fatal: Anchor allocation failed\n", stderr);
-        abort();
-    }
-    return ptr;
-}
-
-void claw_runtime_anchor_free(void* ptr) {
-    free(ptr);
-}

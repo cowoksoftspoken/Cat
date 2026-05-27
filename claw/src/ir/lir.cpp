@@ -175,6 +175,8 @@ bool isKnownBuiltinMethod(std::string_view name) {
     static const std::unordered_set<std::string> methods = {
         "len",
         "is_empty",
+        "new",
+        "get",
         "byte_at",
         "first_byte",
         "last_byte",
@@ -935,3 +937,4 @@ std::string emitLirProgram(std::string_view entryRealm, const std::vector<OirUni
 }
 
 } // namespace claw::frontend
+

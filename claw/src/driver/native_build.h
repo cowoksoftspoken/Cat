@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ir/oir.h"
-#include "module/project.h"
+#include "workspace/workspace.h"
 
 #include <filesystem>
 #include <string_view>
@@ -9,10 +9,10 @@
 
 namespace claw::driver {
 
-std::filesystem::path defaultNativeOutputPath(const claw::frontend::LoadedProject& project);
+std::filesystem::path defaultNativeOutputPath(const claw::workspace::LoadedProject& project);
 
 std::filesystem::path buildNativeExecutable(
-    const claw::frontend::LoadedProject& project,
+    const claw::workspace::LoadedProject& project,
     std::string_view entryRealm,
     const std::vector<claw::frontend::OirUnitView>& units,
     const std::filesystem::path& compilerBinaryPath,

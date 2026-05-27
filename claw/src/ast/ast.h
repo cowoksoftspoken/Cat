@@ -18,6 +18,7 @@ struct TypeNode : public AstNode {
     std::string name;
     std::string viewKind;
     std::string scopeName;
+    std::string viewScope;
     std::vector<std::unique_ptr<TypeNode>> params;
 };
 
@@ -140,6 +141,11 @@ struct ScanStmt : public Stmt {
     std::unique_ptr<BlockStmt> body;
 };
 
+struct ScopeStmt : public Stmt {
+    std::string name;
+    std::unique_ptr<BlockStmt> body;
+};
+
 struct StopStmt : public Stmt {};
 struct SkipStmt : public Stmt {};
 
@@ -163,11 +169,6 @@ struct LiftStmt : public Stmt {
 };
 
 struct RawStmt : public Stmt {
-    std::unique_ptr<BlockStmt> body;
-};
-
-struct ScopeStmt : public Stmt {
-    std::string name;
     std::unique_ptr<BlockStmt> body;
 };
 

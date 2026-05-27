@@ -70,6 +70,7 @@ struct ResolvedType {
     std::string name;
     std::string viewKind;
     std::string scopeName;
+    std::string viewScope;
     std::vector<ResolvedType> params;
     TypeCategory category = TypeCategory::Unknown;
     bool isGeneric = false;

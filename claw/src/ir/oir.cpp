@@ -412,9 +412,9 @@ OirValue lowerExpr(
         return OirValue{result, type, false};
     }
     if (auto* borrow = dynamic_cast<const BorrowExpr*>(expr)) {
-        OirValue target = lowerExpr(sema, borrow->target.get(), context, blockIndex);
-        target.type = exprType(sema, expr);
-        return target;
+        OirValue lowered = lowerExpr(sema, borrow->target.get(), context, blockIndex);
+        lowered.type = exprType(sema, expr);
+        return lowered;
     }
     if (auto* binary = dynamic_cast<const BinaryExpr*>(expr)) {
         const OirValue left = lowerExpr(sema, binary->left.get(), context, blockIndex);
@@ -453,6 +453,19 @@ OirValue lowerExpr(
             return OirValue{result, exprType(sema, expr), false};
         }
 
+        std::string callee;
+        if (auto* memberCallee = dynamic_cast<const MemberExpr*>(call->callee.get())) {
+            if (sema.lookupMethodSignature(call->callee.get()).has_value() &&
+                !dynamic_cast<const IdentExpr*>(memberCallee->object.get())) {
+                const OirValue receiver = lowerExpr(sema, memberCallee->object.get(), context, blockIndex);
+                callee = receiver.text + "." + memberCallee->member;
+            } else {
+                callee = calleeText(call->callee.get());
+            }
+        } else {
+            callee = calleeText(call->callee.get());
+        }
+
         std::vector<OirValue> args;
         args.reserve(call->args.size());
         for (const auto& arg : call->args) {
@@ -460,7 +473,6 @@ OirValue lowerExpr(
         }
 
         const std::string type = exprType(sema, expr);
-        const std::string callee = calleeText(call->callee.get());
         const auto callBuiltinTag = builtinCallTag(sema, call);
         const auto callExternalInfo = externalCallInfo(sema, call, callee, type);
         if (type == "Unit") {
@@ -587,6 +599,14 @@ std::optional<size_t> lowerStmt(
         lowerBlock(sema, ownership, scan->body.get(), bodyLabel, context, headerLabel, emitter);
         context.loopStack.pop_back();
         return context.addBlock(exitLabel);
+    }
+
+    if (auto* scopeStmt = dynamic_cast<const ScopeStmt*>(stmt)) {
+        const std::string scopeLabel = context.blockName("scope_" + scopeStmt->name);
+        const std::string contLabel = context.blockName("scope_cont");
+        appendInst(context, currentBlockIndex, OirGotoInst{scopeLabel});
+        lowerBlock(sema, ownership, scopeStmt->body.get(), scopeLabel, context, contLabel, emitter);
+        return context.addBlock(contLabel);
     }
 
     if (auto* pick = dynamic_cast<const PickStmt*>(stmt)) {
@@ -944,8 +964,8 @@ bool stmtDefinitelyTerminatesImpl(const OirEmitter& emitter, const Stmt* stmt) {
         return emitter.blockDefinitelyTerminates(raw->body.get());
     }
 
-    if (auto* scope = dynamic_cast<const ScopeStmt*>(stmt)) {
-        return emitter.blockDefinitelyTerminates(scope->body.get());
+    if (auto* scopeStmt = dynamic_cast<const ScopeStmt*>(stmt)) {
+        return emitter.blockDefinitelyTerminates(scopeStmt->body.get());
     }
 
     return false;
@@ -1163,3 +1183,6 @@ std::string emitOirProgram(std::string_view entryRealm, const std::vector<OirUni
 }
 
 } // namespace claw::frontend
+
+
+

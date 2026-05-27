@@ -11,8 +11,9 @@ enum class TokenKind {
     KwLoop, KwScan, KwStop, KwSkip, KwShape, KwChoice, KwView, KwScope,
     KwImport, KwShare, KwSuper, KwPub, KwModules,
     KwAs, KwOver, KwOf, KwFail, KwPick, KwLift, KwRaw,
-    KwRef, KwMut, KwLook, KwEdit, KwTry, KwForeign, KwStatic,
-    KwContract, KwImplements, KwWith, KwSelf, KwTrue, KwFalse, KwRealm,
+    KwRef, KwMut, KwTry, KwForeign, KwStatic,
+    KwContract, KwImplements, KwWith, KwSelf, KwTrue, KwFalse,
+    KwLook, KwEdit, KwRealm,
 
     // Punctuation
     LBracket, RBracket,

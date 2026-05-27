@@ -16,8 +16,8 @@ entry:
   %str.slice.1 = insertvalue %claw.slice poison, ptr %str.ptr.0, 0
   %str.slice.2 = insertvalue %claw.slice %str.slice.1, i64 5, 1
   store %claw.slice %str.slice.2, ptr %source.addr, align 8
-  br label %scope_0
-scope_0:
+  br label %scope_s_0
+scope_s_0:
   %t0.addr = alloca %"revise_view_shape_scope::Parser", align 8
   %field.ptr.3 = getelementptr inbounds %"revise_view_shape_scope::Parser", ptr %t0.addr, i32 0, i32 0
   %load.4 = load %claw.slice, ptr %source.addr, align 8

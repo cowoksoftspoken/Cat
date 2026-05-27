@@ -247,8 +247,9 @@ Key areas:
 - `claw/src/parser/` - lexer, parser, AST construction
 - `claw/src/analysis/` - semantic analysis, type resolution, ownership and borrow checking
 - `claw/src/ir/` - AIR, OIR, and LIR lowering
-- `claw/src/backend/` - LLVM IR emission and native build flow
+- `claw/src/codegen/` - LLVM IR emission and native build flow
 - `claw/src/driver/` - CLI entry points and build commands
+- `claw/src/workspace/` - workspace loading, entry discovery, and `claw.toml` handling
 - `claw/runtime/` - native runtime support used by generated programs
 
 ## Compiler Commands
@@ -267,7 +268,8 @@ From the compiler directory, the main commands are:
 
 The active revised test suites are separated by layer:
 
-- `claw/test/` - frontend and semantic checks
+- `claw/test/` - compatibility wrapper for the frontend suite entry point
+- `claw/test_frontend/` - revised frontend and semantic checks
 - `claw/test_backend/` - LLVM IR regression checks
 - `claw/test_native/` - native executable integration tests
 

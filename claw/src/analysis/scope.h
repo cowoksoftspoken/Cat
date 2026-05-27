@@ -19,6 +19,7 @@ struct Symbol {
     const BindingStmt* bindingDecl = nullptr;
     std::optional<size_t> viewSourceParamIndex;
     std::vector<std::string> declaredNamedScopes;
+    int lexicalDepth = 0;
     std::shared_ptr<ModuleInfo> moduleInfo;
 };
 

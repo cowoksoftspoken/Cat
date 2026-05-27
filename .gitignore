@@ -5,5 +5,6 @@ ideas
 revise
 claw/build-ucrt64-clang
 claw/*.o
+claw/test_frontend/build
 claw/test_native/*/build
 claw/build-native-tests

@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -23,6 +24,12 @@ struct ExprStmt;
 struct TypeNode;
 struct ScopeStmt;
 struct ShapeInitExpr;
+
+struct NamedBorrowScope {
+    std::string name;
+    SourceSpan span;
+    int lexicalDepth = 0;
+};
 
 class SemanticAnalyzer {
 public:
@@ -55,10 +62,21 @@ private:
     int loopDepth = 0;
     int rawDepth = 0;
     std::vector<std::string> activeNamedScopes;
+    int lexicalScopeDepth = 0;
+    std::vector<NamedBorrowScope> namedBorrowScopes;
 
     void reportError(const std::string& msg);
     void reportError(const SourceSpan& span, const std::string& msg);
     void reportError(const AstNode* node, const std::string& msg);
+    void enterSemanticScope();
+    void exitSemanticScope();
+    bool enterNamedBorrowScope(const std::string& name, const SourceSpan& span);
+    void exitNamedBorrowScope();
+    const NamedBorrowScope* lookupNamedBorrowScope(const std::string& name) const;
+    bool validateScopedViewType(const ResolvedType& type, const AstNode* node, std::string_view context);
+    bool validateAnchorPayloadType(const ResolvedType& type, const AstNode* node, std::string_view context);
+    const Symbol* resolveBorrowSourceSymbol(const Expr* expr) const;
+    bool validateScopedBorrowSource(const Expr* expr, const ResolvedType& targetType, const AstNode* node, std::string_view context);
     void registerPrelude();
     void registerImports(const RealmDecl* realm);
     void declareTopLevel(const RealmDecl* realm);
@@ -114,3 +132,4 @@ private:
 };
 
 } // namespace claw::frontend
+
